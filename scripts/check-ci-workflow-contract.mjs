@@ -16,6 +16,7 @@ const pinnedActions = [...workflow.matchAll(/^\s+uses:\s+([^@\s]+)@([a-f0-9]{40}
 assert.equal(pinnedActions.length, 3, "all external actions must use full commit-SHA pins with reviewable version comments");
 assert.doesNotMatch(workflow, /^\s+uses:\s+[^@\s]+@v\d+/m, "mutable action tags are not allowed");
 assert.match(workflow, /runs-on:\s*windows-2025/);
+assert.match(workflow, /CARGO_TARGET_DIR:\s*\$\{\{\s*runner\.temp\s*\}\}\\aerotune-cargo-target/, "CI must override the machine-specific Cargo target path for every step");
 assert.doesNotMatch(workflow, /runs-on:\s*windows-latest/);
 assert.match(workflow, /toolchain:\s*1\.97\.1/);
 assert.match(workflow, /components:\s*rustfmt, clippy/);

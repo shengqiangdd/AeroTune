@@ -18,6 +18,9 @@ jobs:
     # Pin the OS generation; GitHub still updates the hosted image within this label.
     runs-on: windows-2025
     timeout-minutes: 90
+    # Override the developer-specific F: target in src-tauri/.cargo/config.toml.
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}\aerotune-cargo-target
     steps:
       - name: Check out source without a persisted token
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
