@@ -1,0 +1,3 @@
+# 构建产物放 F 盘（C 盘只剩 5.7G）
+[build]
+target-dir = "F:/dev/cargo-tgt/aerotune"

@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AeroTune · 前端功能测试台（mock IPC）</title>
+  <script>
+    window.__BOOT_ERRORS = [];
+    window.addEventListener("error", (e) => window.__BOOT_ERRORS.push(String(e.message || e.error || "error")));
+    window.addEventListener("unhandledrejection", (e) => window.__BOOT_ERRORS.push("rejection: " + String(e.reason && e.reason.stack ? e.reason.stack.slice(0, 400) : e.reason)));
+  </script>
+  <script>
+    // 前端功能测试台：在真实 Tauri 运行时缺失时模拟 IPC 层，
+    // 用于验证全部页面的渲染、导航与空态降级。生产构建不包含此文件。
+    (function () {
+      const listeners = new Map(); // eventId -> { event, handler }
+      let callbackSeq = 1;
+      let sampleSeq = 1;
+      let eventSeq = 1000;
+      const ipcLog = (window.__IPC_LOG = []);
+      const warned = new Set();
+
+      function makeStats() {
+        const t = Date.now();
+        return {
+          sample_id: sampleSeq++,
+          cpu: 23.5 + Math.round(Math.sin(t / 9000) * 8 * 10) / 10,
+          per_core: [31, 12, 44, 8, 26, 19, 37, 5, 22, 15, 41, 9],
+          cpu_freq_mhz: 3600,
+          mem_used_gb: 9.6,
+          mem_total_gb: 15.8,
+          swap_used_gb: 1.2,
+          swap_total_gb: 9.8,
+          system_drive: "C:",
+          disks: [
+            { mount: "C:", total_gb: 476, used_gb: 421, fs: "NTFS" },
+            { mount: "D:", total_gb: 931, used_gb: 640, fs: "NTFS" },
+          ],
+          net_rx_kbps: 128.4,
+          net_tx_kbps: 42.1,
+          net_today_rx_gb: 1.35,
+          net_today_tx_gb: 0.21,
+          gpu: {
+            name: "Test GPU",
+            utilization: 12,
+            mem_used_mb: 1024,
+            mem_total_mb: 8192,
+            temperature: 55,
+          },
+          battery: { ac_online: true, ac_connected: true, percent: 88, secs_left: null },
+          battery_status_ok: true,
+          uptime_secs: 4210,
+          process_count: 218,
+        };
+      }
+
+      const autoSettings = {
+        adaptive: false,
+        auto_game: false,
+        auto_power: false,
+        game_boost: false,
+        cpu_scheduler: false,
+        scheduler_shadow: true,
+        close_to_tray: true,
+        autopilot: false,
+        auto_dispose_anomalies: false,
+        autopilot_backup: null,
+        game_list: ["test-game.exe"],
+        protected_apps: [],
+        rules: [
+          { id: 1, dim: "cpu", threshold: 80, secs: 10, action: "notify", enabled: false },
+          { id: 2, dim: "mem", threshold: 90, secs: 15, action: "notify", enabled: false },
+        ],
+        auto_restore_point: false,
+        away_idle_secs: 300,
+        heavy_cpu_threshold: 60,
+        state_seconds: { game: 0 },
+        auto_dim: false,
+        history: {},
+      };
+
+      const autoState = {
+        cpu_scheduler: {
+          supported: false,
+          eco_qos_processes: 0,
+          foreground_priority: null,
+          last_updated_unix: Math.floor(Date.now() / 1000),
+          detail: "测试环境未启用",
+          monitored_processes: 0,
+          background_candidates: 0,
+          background_cpu_cap_pct: 2.5,
+          candidate_limit: 10,
+        },
+        settings: autoSettings,
+        foreground: "explorer.exe",
+        fullscreen: false,
+        mode: "normal",
+        boosted_pid: null,
+        cooldown: false,
+        adaptive: false,
+        adaptive_state: "常规",
+        stats_sample_id: sampleSeq,
+        cpu_core_peak_pct: 44,
+        cpu_saturated_cores: 1,
+        cpu_logical_cores: 12,
+        idle_secs: 3,
+        hold_secs: 0,
+        decisions: [
+          { ts: Math.floor(Date.now() / 1000) - 60, from: "game", to: "normal", reason: "测试决策日志" },
+        ],
+        selected_algorithm: "efficiency",
+        algorithm_reason: "测试算法说明",
+        algorithm_scores: [
+          { id: "efficiency", score: 80, suitable: true, reason: "测试评分" },
+        ],
+      };
+
+      const diagnostics = {
+        score: 86,
+        deductions: [
+          { item: "startup", cost: 6 },
+          { item: "uptime", cost: 8 },
+        ],
+        anomalies: [
+          { pid: 4242, name: "test-worker.exe", kind: "cpu", value: 42.5, baseline: 3.1, robust_z: 6.2 },
+        ],
+        process_sample_ready: true,
+        cpu_baseline_warming_processes: 0,
+        mem_baseline_warming_processes: 0,
+        io_baseline_warming_processes: 0,
+        mem_slope: 0.02,
+        mem_pct: 60.7,
+        mem_slope_ready: true,
+        mem_slope_sample_count: 45,
+        mem_critical_eta_secs: null,
+        cpu_trend_pct_per_sec: 0.1,
+        cpu_forecast_10s_pct: 25,
+        cpu_forecast_stability: 0.9,
+        cpu_forecast_sample_count: 31,
+        cpu_forecast_observed_span_secs: 30,
+        cpu_forecast_ready: true,
+      };
+
+      const recommendations = [
+        {
+          id: "test-recommendation",
+          title: "测试建议：示例条目",
+          reason: "测试环境的样例建议文案",
+          action: "processes",
+          priority: 60,
+        },
+      ];
+
+      const handlers = {
+        is_admin: () => false,
+        is_silent_start: () => false,
+        get_stats: () => makeStats(),
+        get_diagnostics: () => diagnostics,
+        get_anomaly_context: () => {
+          if (!diagnostics.anomalies.length) return [];
+          const onset = Math.floor(Date.now() / 1000) - 95;
+          return diagnostics.anomalies.map((anomaly, index) => ({
+            pid: anomaly.pid,
+            name: anomaly.name,
+            kind: anomaly.kind,
+            onset_unix: onset,
+            age_secs: 95,
+            hints: [
+              { tone: "recent", text: "该进程启动后 35 秒 即进入高负载" },
+              { tone: index === 0 ? "correlation" : "none", text: index === 0 ? "与 updater-probe.exe（PID 501）的启动时间相近" : "未发现同期的本地事件" },
+            ],
+            timeline: index === 0 ? [
+              { at_unix: onset - 240, kind: "journal", label: "开启游戏模式" },
+              { at_unix: onset - 150, kind: "decision", label: "切换 normal → game" },
+              { at_unix: onset - 40, kind: "process-start", label: "updater-probe.exe 启动" },
+              { at_unix: onset, kind: "onset", label: "异常起点" },
+            ] : [{ at_unix: onset, kind: "onset", label: "异常起点" }],
+          }));
+        },
+        get_scene_suggestions: () => [
+          { name: "newgame-probe.exe", total_hits: 5, distinct_days: 3, last_seen_unix: Math.floor(Date.now() / 1000) - 3600 },
+        ],
+        dismiss_scene_suggestion: () => true,
+        add_game_item: () => ["test-game.exe", "newgame-probe.exe"],
+        get_residency_suggestions: () => [
+          { name: "vendor-updater.exe", role_hint: "updater-suspect", resident_days: 4, avg_mem_mb: 186.5, low_cpu_ratio: 0.97, last_seen_unix: Math.floor(Date.now() / 1000) - 1800 },
+          { name: "sync-helper.exe", role_hint: "app", resident_days: 3, avg_mem_mb: 142.0, low_cpu_ratio: 0.9, last_seen_unix: Math.floor(Date.now() / 1000) - 900 },
+        ],
+        dismiss_residency_suggestion: () => true,
+        analyze_experiment_consistency: (args) => {
+          const records = (args && args.records) || [];
+          const complete = records.filter((r) => r && r.status === "complete" && r.after);
+          if (!complete.length) return { modes: [], verdict: "empty", summary: "暂无可分析的完整实验记录。" };
+          return {
+            modes: [{
+              mode: complete[0].mode,
+              analyzed: complete.length,
+              cpu_direction: complete.length >= 5 ? "lower" : "mixed",
+              cpu_median_delta: complete.length >= 5 ? -8.4 : null,
+              mem_direction: "flat",
+              mem_median_delta: 0.05,
+            }],
+            verdict: complete.length >= 5 ? "ready" : "insufficient",
+            summary: complete.length >= 5
+              ? "部分模式的多次实验呈现一致方向；这是观察结论，AeroTune 不会据此自动调整参数。"
+              : "完整实验样本不足（每种模式至少需要 5 次可信实验），暂不构成任何调整依据。",
+          };
+        },
+        get_process_insights: () => ({
+          generated_unix: Math.floor(Date.now() / 1000),
+          signature_deferred: 1,
+          entries: [
+            { pid: 102, name: "test-worker.exe", path: "C:\\test\\worker.exe", role_id: "user-app", role_label: "用户应用", role_detail: "安装在常规程序或用户目录", mem_mb: 512, cpu: 12.8, start_age_secs: 7540, signature: "signed" },
+            { pid: 103, name: "vendor-updater.exe", path: "C:\\Tools\\vendor-updater.exe", role_id: "updater-suspect", role_label: "更新器嫌疑", role_detail: "名称包含 update/setup/install 等标记（启发式，可能误判）", mem_mb: 210, cpu: 0.2, start_age_secs: 3600, signature: "unsigned" },
+            { pid: 104, name: "mystery.exe", path: "", role_id: "unknown", role_label: "未知", role_detail: "路径不可读（权限不足或进程已退出）", mem_mb: 96, cpu: 0.1, start_age_secs: null, signature: "unknown" },
+          ],
+        }),
+        get_disk_health_trends: () => ({
+          trends: [
+            { name: "Test SSD", samples: 6, span_days: 12.5, wear_delta: 2.0, wear_rate_per_1000h: 0.85, hours_delta: 2350, error_delta: 0, tone: "wear-moving", summary: "磨损较首次观测上升 2 个百分点" },
+            { name: "Data HDD", samples: 4, span_days: 9.0, wear_delta: null, wear_rate_per_1000h: null, hours_delta: 1600, error_delta: 3, tone: "error-rise", summary: "未纠正 I/O 错误较上次观测增加 3；建议关注该磁盘并保持备份" },
+            { name: "New Disk", samples: 1, span_days: null, wear_delta: null, wear_rate_per_1000h: null, hours_delta: null, error_delta: null, tone: "insufficient", summary: "仅一次观测，趋势需至少两次不同时间的样本" },
+          ],
+          stored: true,
+          skipped_unchanged: 0,
+          generated_unix: Math.floor(Date.now() / 1000),
+        }),
+        dismiss_disk_trend: () => true,
+        get_smart_recommendations: () => [
+          ...recommendations,
+          { id: "resident-app-vendor-updater.exe", title: "观察：长期驻留的低活跃进程", reason: "跨 4 天观测、平均 186 MB 内存，97% 的样本处于低活跃；仅为本机观察提示，不自动处置，可在进程管理中查看或忽略。", action: "processes", priority: 42 },
+          { id: "scene-candidate-newgame-probe.exe", title: "候选：多次确认全屏但不在游戏名单", reason: "影子观测到 5 次确认全屏会话、跨 3 天；可在智能引擎页采纳或忽略，是否加入名单由你决定。", action: "auto", priority: 40 },
+        ],
+        get_auto_settings: () => autoSettings,
+        get_auto_state: () => autoState,
+        get_state_seconds: () => ({ game: 321, away: 45, heavy: 12 }),
+        set_autopilot: (args) => {
+          const enabled = !!(args && args.enabled);
+          autoSettings.autopilot = enabled;
+          if (enabled) {
+            autoSettings.autopilot_backup = {
+              adaptive: false, auto_game: false, auto_power: false,
+              game_boost: false, cpu_scheduler: false, scheduler_shadow: true,
+              auto_dispose_anomalies: false,
+            };
+            autoSettings.adaptive = true;
+            autoSettings.auto_game = true;
+            autoSettings.auto_power = true;
+            autoSettings.game_boost = true;
+            autoSettings.cpu_scheduler = true;
+            autoSettings.scheduler_shadow = false;
+            autoSettings.auto_dispose_anomalies = true;
+            window.__emitEvent("auto-actions", ["全自动模式：已开启（关闭时自动还原此前设置）"]);
+          } else {
+            const backup = autoSettings.autopilot_backup;
+            if (backup) {
+              autoSettings.adaptive = backup.adaptive;
+              autoSettings.auto_game = backup.auto_game;
+              autoSettings.auto_power = backup.auto_power;
+              autoSettings.game_boost = backup.game_boost;
+              autoSettings.cpu_scheduler = backup.cpu_scheduler;
+              autoSettings.scheduler_shadow = backup.scheduler_shadow;
+              autoSettings.auto_dispose_anomalies = backup.auto_dispose_anomalies;
+            } else {
+              autoSettings.adaptive = false;
+              autoSettings.auto_dispose_anomalies = false;
+            }
+            autoSettings.autopilot_backup = null;
+            window.__emitEvent("auto-actions", ["全自动模式：已关闭并还原此前设置"]);
+          }
+          return autoSettings;
+        },
+        set_auto_setting: (args) => {
+          if (args && args.key === "auto_dispose_anomalies") {
+            autoSettings.auto_dispose_anomalies = !!args.on;
+            window.__emitEvent("auto-actions", [args.on ? "异常自动降级已开启" : "异常自动降级已关闭"]);
+          }
+          return null;
+        },
+        get_tweak_states: () => ({ gamedvr: true, hags: null, priority_boost: false }),
+        get_epp: () => null,
+        get_mode_state: () => null,
+        get_system_info: () => ({
+          os: "Windows 测试环境",
+          version: "10.0.26300",
+          arch: "x86_64",
+          host: "aerotune-test-host",
+          cpu_model: "Mock CPU 12-core",
+          cores: 12,
+          admin: false,
+          exe: "C:\\test\\aerotune.exe",
+          silent: false,
+        }),
+        get_telemetry_minimal: () => ({ enabled: false }),
+        get_update_pause: () => null,
+        get_dns: () => [],
+        get_tcp_autotuning: () => "normal",
+        get_autostart: () => false,
+        list_processes: () => [
+          { pid: 101, parent_pid: null, name: "explorer.exe", cpu: 2.1, mem_mb: 180.2, io_mb_s: 0.4, path: "C:\\Windows\\explorer.exe", role: "system-core", role_label: "系统核心" },
+          { pid: 102, parent_pid: 101, name: "test-worker.exe", cpu: 12.8, mem_mb: 512.0, io_mb_s: 1.2, path: "C:\\test\\worker.exe", role: "user-app", role_label: "用户应用" },
+          { pid: 103, parent_pid: 101, name: "vendor-updater.exe", cpu: 0.2, mem_mb: 210.0, io_mb_s: 0.0, path: "C:\\Tools\\vendor-updater.exe", role: "updater-suspect", role_label: "更新器嫌疑" },
+        ],
+        list_startup: () => [
+          { id: "1", name: "Test Startup", cmd: "C:\\test\\startup.exe", source: "HKCU Run", enabled: true },
+        ],
+        list_changes: () => [],
+        list_power_plans: () => [
+          { guid: "381b4222-f694-41f0-9685-ff5bb260df2e", name: "平衡", active: true },
+          { guid: "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", name: "高性能", active: false },
+        ],
+        list_adapters: () => [],
+        list_wifi_profiles: () => [],
+        list_services: () => [],
+        list_logon_tasks: () => [],
+        list_delayed_startup: () => [],
+        list_gpu_prefs: () => [],
+        list_nic_power: () => [],
+        list_tcp_latency: () => [],
+        list_redundant_plans: () => [],
+        list_shadow_storage: () => [],
+        list_appx: () => [],
+        boot_history: () => [],
+        startup_impacts: () => [],
+        disk_health: () => [
+          { name: "Test SSD", media: "SSD", health: "Healthy", size_gb: 476, temp: 41, wear: 12, power_on_hours: 8400, read_errors: 0, write_errors: 0 },
+          { name: "Data HDD", media: "HDD", health: "Healthy", size_gb: 931, temp: 35, wear: null, power_on_hours: 15200, read_errors: 3, write_errors: 0 },
+          { name: "New Disk", media: "SSD", health: "Healthy", size_gb: 240, temp: 38, wear: 1, power_on_hours: 120, read_errors: 0, write_errors: 0 },
+        ],
+        preview_junk: () => [],
+        battery_report: () => null,
+        hibernate_info: () => null,
+        compactos_status: () => null,
+        mem_compression_status: () => null,
+        power_diagnostics: () => null,
+        ping_quality: () => null,
+        get_reliability_events: () => null,
+        defrag_status: () => null,
+        "plugin:app|version": () => "1.5.9",
+        "plugin:window|show": () => null,
+        "plugin:window|is_visible": () => true,
+        "plugin:window|inner_size": () => null,
+        "plugin:window|outer_size": () => null,
+        "plugin:window|scale_factor": () => 1,
+        "plugin:window|inner_position": () => null,
+        "plugin:window|outer_position": () => null,
+        "plugin:window|is_fullscreen": () => false,
+        "plugin:window|is_maximized": () => false,
+        "plugin:window|is_decorated": () => true,
+        "plugin:window|is_resizable": () => true,
+        "plugin:window|title": () => "AeroTune",
+        "plugin:window|current_monitor": () => null,
+        "plugin:window|primary_monitor": () => null,
+        "plugin:window|available_monitors": () => [],
+        "plugin:window|theme": () => "dark",
+        "plugin:event|listen": (args) => {
+          const name = args && args.event;
+          const handler = window.__TAURI_INTERNALS__.callbacks[args && args.handler];
+          const eventId = eventSeq++;
+          if (typeof name === "string" && typeof handler === "function") {
+            listeners.set(eventId, { event: name, handler });
+          }
+          return eventId;
+        },
+        "plugin:event|unlisten": (args) => {
+          if (args && args.eventId != null) listeners.delete(args.eventId);
+          return null;
+        },
+      };
+
+      // Tauri 事件插件的内部登记表（_unlisten 依赖）
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+        registerListener(event, eventId, handler) {
+          if (typeof handler === "function") listeners.set(eventId, { event, handler });
+        },
+        unregisterListener(event, eventId) {
+          listeners.delete(eventId);
+        },
+      };
+
+      const internals = {
+        metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
+        callbacks: {},
+        transformCallback(callback, once) {
+          const id = callbackSeq++;
+          internals.callbacks[id] = callback;
+          return id;
+        },
+        invoke(cmd, args) {
+          ipcLog.push(cmd);
+          if (Object.prototype.hasOwnProperty.call(handlers, cmd)) {
+            return Promise.resolve(handlers[cmd](args));
+          }
+          if (!warned.has(cmd)) {
+            warned.add(cmd);
+            console.info("[dev-test] 未 mock 的命令（返回 null）:", cmd);
+          }
+          return Promise.resolve(null);
+        },
+      };
+      window.__TAURI_INTERNALS__ = internals;
+
+      window.__emitEvent = function (event, payload) {
+        let delivered = 0;
+        for (const { event: name, handler } of listeners.values()) {
+          if (name !== event) continue;
+          try { handler({ event, id: eventSeq++, payload }); delivered++; } catch (e) { console.error("[dev-test] handler error", event, e); }
+        }
+        return delivered;
+      };
+
+      // 事件流：主窗口已显示（触发内容加载）+ 1Hz 遥测推送
+      setTimeout(() => window.__emitEvent("main-window-shown", null), 50);
+      window.__emitEvent("main-window-shown", null);
+      window.__emitEvent("auto-actions", ["测试自动动作通知"]);
+      setInterval(() => window.__emitEvent("stats", makeStats()), 1000);
+    })();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import("/src/main.tsx");
+  </script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+[package]
+name = "aerotune"
+version = "1.5.9"
+description = "AeroTune — Windows 系统优化中枢"
+edition = "2021"
+
+[lib]
+name = "aerotune_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json = "1"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+minisign-verify = "0.3"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "=2.14.0"
+reqwest = { version = "0.13", default-features = false }
+url = "2"
+zip = { version = "4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+sysinfo = "0.33"
+winreg = "0.55"
+walkdir = "2"
+regex = "1"
+sha2 = "0.10"
+getrandom = "0.4.3"
+uuid = "1.28.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_WinTrust",
+  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography_Catalog",
+  "Win32_Security_Cryptography_Sip",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_IO",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Services",
+  "Win32_System_Power",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_Time",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Globalization",
+] }
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[patch.crates-io]
+tauri-plugin-updater = { path = "../vendor/tauri-plugin-updater" }

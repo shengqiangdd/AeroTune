@@ -1,0 +1,29 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis"],
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_MINISIGN_PUBLIC_KEY_CONTENT",
+      "endpoints": [
+        "https://updates.example.invalid/aerotune/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "dangerousInsecureTransportProtocol": false,
+      "dangerousAcceptInvalidCerts": false,
+      "dangerousAcceptInvalidHostnames": false,
+      "windows": {
+        "installMode": "quiet",
+        "installerArgs": []
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const services = readFileSync("src-tauri/src/services.rs", "utf8");
+const util = readFileSync("src-tauri/src/util.rs", "utf8");
+const ui = readFileSync("src/pages/Services.tsx", "utf8");
+const api = readFileSync("src/lib/api.ts", "utf8");
+const journal = readFileSync("src-tauri/src/journal.rs", "utf8");
+const cargo = readFileSync("src-tauri/Cargo.toml", "utf8");
+
+assert.match(cargo, /"Win32_System_Services"/);
+assert.match(util, /pub fn windows_directory\(\)[\s\S]*GetWindowsDirectoryW/);
+assert.match(util, /pub fn program_files_directories\([\s\S]*FOLDERID_ProgramFiles[\s\S]*FOLDERID_ProgramFilesX86/);
+assert.match(services, /fn read_service_reg\([\s\S]*ImagePath[\s\S]*ObjectName/);
+assert.match(services, /fn service_image_executable\([\s\S]*%systemroot%[\s\S]*has_alternate_stream[\s\S]*ParentDir[\s\S]*path\.is_absolute\(\)/i);
+assert.match(services, /fn service_path_has_no_reparse_components[\s\S]*file_attributes\(\) & 0x0400/);
+assert.match(services, /fn service_image_is_modifiable\([\s\S]*canonicalize[\s\S]*path_is_within[\s\S]*acl_is_protected/);
+assert.match(services, /fn read_service_acl_snapshot[\s\S]*GetFileInformationByHandle[\s\S]*FILE_FLAG_OPEN_REPARSE_POINT[\s\S]*GetSecurityInfo[\s\S]*GetSecurityDescriptorDacl/);
+assert.match(services, /fn service_acl_snapshot_is_protected[\s\S]*TRUSTED_SERVICE_WRITER_SIDS[\s\S]*SERVICE_FILE_WRITE_MASK/);
+assert.match(services, /fn service_image_acl_is_protected[\s\S]*service_acl_chain_is_protected/);
+assert.match(services, /fn service_account_is_supported[\s\S]*nt service/);
+assert.match(services, /fn query_scm_service_account[\s\S]*OpenSCManagerW[\s\S]*OpenServiceW[\s\S]*QueryServiceConfigW/);
+assert.match(services, /fn service_account_from_scm_config[\s\S]*SERVICE_WIN32_OWN_PROCESS[\s\S]*SERVICE_WIN32_SHARE_PROCESS[\s\S]*start_name\.unwrap_or\("LocalSystem"\)/);
+assert.match(services, /bytes_needed > 8 \* 1024/);
+assert.match(services, /service_scm_account_null_and_type_policy_fails_closed/);
+assert.match(services, /fn service_account_configurations_match[\s\S]*service_account_is_supported[\s\S]*service_accounts_match/);
+assert.match(services, /"windefend"[\s\S]*"wuauserv"[\s\S]*"trustedinstaller"/);
+assert.match(services, /Get-CimInstance Win32_Service[\s\S]*StartName/);
+assert.match(services, /let account_valid = service_account_is_supported[\s\S]*service_accounts_match/);
+assert.match(services, /service_scm_account_matches\(&name, registry\)/);
+assert.match(services, /let modifiable = !CRITICAL_SERVICES\.contains/);
+
+const setter = services.match(/pub fn set_service_startup\([\s\S]*?\n\}/)?.[0];
+assert.ok(setter);
+assert.match(setter, /crate::util::is_admin\(\)/);
+assert.match(setter, /valid_service_name\(&name\)/);
+assert.match(setter, /CRITICAL_SERVICES\.contains/);
+assert.match(setter, /read_service_reg\(&services, &name\)/);
+assert.match(setter, /service_account_is_supported\(&name, &account\)/);
+assert.match(setter, /service_scm_account_matches\(&name, &account\)/);
+assert.match(setter, /service_image_is_modifiable\(&image_path, &windows_dir, &program_files_dirs\)/);
+assert.ok(setter.indexOf("service_image_is_modifiable") < setter.indexOf("auto_restore_point"));
+const restoreTarget = services.match(/pub\(crate\) fn service_restore_target_allowed\([\s\S]*?\n\}/)?.[0];
+assert.ok(restoreTarget);
+assert.match(restoreTarget, /service_scm_account_matches\(name, &account\)/);
+assert.match(setter, /begin_change_group/);
+assert.match(setter, /apply_service_startup_pair/);
+assert.match(setter, /revert_change_group\(group_id\)/);
+assert.match(services, /service_startup_pair_rolls_back_first_write_when_second_fails/);
+assert.match(services, /service_startup_pair_reports_rollback_failure_and_stops_after_first_error/);
+assert.match(journal, /pub fn id\(&self\) -> u64/);
+assert.match(services, /service_image_scope_fails_closed_and_requires_a_protected_install_root/);
+
+const selector = ui.match(/<select[\s\S]*?onChange=\{\(e\) => change\(s, e\.target\.value\)\}[\s\S]*?\n\s*\/?>/)?.[0];
+assert.ok(selector);
+assert.match(selector, /disabled=\{loading \|\| loadFailed \|\| busyService !== null \|\| !s\.modifiable\}/);
+assert.match(api, /export interface SvcInfo[\s\S]*account: string[\s\S]*modifiable: boolean/);
+assert.match(ui, /s\.account/);
+assert.match(ui, /修改\/还原时由后端再次核验 SCM 账户/);
+assert.match(ui, /可执行文件与父目录 ACL 也须通过检查/);
+assert.match(ui, /发布者签名尚未核验，ACL 检查与服务配置修改也非原子操作/);
+
+console.log("PASS service startup changes are admin-gated and limited to canonical images under known Program Files roots");

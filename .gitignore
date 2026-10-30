@@ -1,0 +1,17 @@
+node_modules/
+dist/
+src-tauri/target/
+vendor/tauri-plugin-updater/target/
+src-tauri/gen/
+src-tauri/tauri.updater.local.json
+.env.updater.local
+*.private.key
+*.log
+AeroTune-report-*.json
+
+# Local build and historical release artifacts
+/AeroTune.exe
+/AeroTune_*_x64-setup.exe
+/releases/
+/.tmp-rust-tests/
+/.zcode/

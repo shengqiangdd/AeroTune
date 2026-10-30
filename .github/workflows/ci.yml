@@ -1,0 +1,52 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and validate on Windows
+    # Pin the OS generation; GitHub still updates the hosted image within this label.
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out source without a persisted token
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24.18.1
+          package-manager-cache: false
+
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@11.8.0
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install stable MSVC Rust toolchain, rustfmt, and Clippy
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+          cache: false
+
+      # No signing secrets or publish permissions are provided to this validation workflow.
+      # The updater must remain hard-off until its separate release gates are approved.
+      - name: Run full release-quality gate
+        run: pnpm run check:release
+
+      - name: Compile the guarded application without bundling or signing
+        run: node scripts/guarded-tauri.mjs build --no-bundle
