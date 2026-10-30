@@ -5,6 +5,7 @@
 ## 未发布 — 仓库与文档整理
 
 - 选择 MIT 许可证，新增 `LICENSE`，并同步 npm / Cargo 元数据与 README。
+- 加入 `.gitattributes` 固定文本文件为 LF，修复 Windows CI 检查对 CRLF 的敏感性。
 - README 改为聚焦项目介绍、当前能力、安全边界与开发方式。
 - 原 README 中带版本或日期的开发记录迁移至此，未扩大原有验证结论。
 

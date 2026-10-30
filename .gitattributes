@@ -1,0 +1,2 @@
+# Keep source and test-contract parsing consistent on Windows and Unix.
+* text=auto eol=lf
