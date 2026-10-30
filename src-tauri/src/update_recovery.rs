@@ -1517,6 +1517,7 @@ pub(crate) struct UpdateTransactionJournal {
 
 impl UpdateTransactionJournal {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn test_fixture() -> Self {
         Self {
             schema_version: JOURNAL_SCHEMA_VERSION,
@@ -1530,6 +1531,7 @@ impl UpdateTransactionJournal {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn phase(&self) -> TransactionPhase {
         self.phase
     }
