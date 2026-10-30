@@ -1530,7 +1530,7 @@ impl UpdateTransactionJournal {
     }
 
     #[cfg(test)]
-pub(crate) fn phase(&self) -> TransactionPhase {
+    pub(crate) fn phase(&self) -> TransactionPhase {
         self.phase
     }
 
