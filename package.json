@@ -1,5 +1,6 @@
 {
   "name": "aerotune",
+  "license": "MIT",
   "private": true,
   "version": "1.5.9",
   "packageManager": "pnpm@11.8.0",

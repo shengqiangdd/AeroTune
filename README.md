@@ -48,7 +48,7 @@ pnpm run tauri build
 
 ## 许可
 
-本工作副本未包含项目根目录许可证文件。创建或同步公开仓库时，应从原开源仓库一并保留 LICENSE；具体授权范围以该许可证文本为准。
+本项目采用 [MIT License](LICENSE)。许可文本中的版权持有人为 `shengqiangdd`。
 
 ## 更新记录
 
