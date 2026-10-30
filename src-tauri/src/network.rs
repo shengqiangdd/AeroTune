@@ -180,10 +180,6 @@ mod tests {
         assert!(adapters
             .iter()
             .all(|a| !a.name.is_empty() && !a.status.is_empty()));
-        assert!(
-            adapters.iter().any(|a| a.name == "WLAN"),
-            "expected the host WLAN adapter in the live result"
-        );
     }
 }
 

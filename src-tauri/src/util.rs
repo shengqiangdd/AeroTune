@@ -782,6 +782,11 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&raw).expect("PowerShell JSON must stay UTF-8");
         assert!(json.is_array() || json.is_object());
-        assert!(json.to_string().contains("以太网"));
+
+        let unicode_raw = run_ps("'以太网' | ConvertTo-Json -Compress")
+            .expect("Windows PowerShell should preserve a fixed UTF-8 sample");
+        let unicode: String = serde_json::from_str(&unicode_raw)
+            .expect("Unicode JSON sample should remain parseable");
+        assert_eq!(unicode, "以太网");
     }
 }
