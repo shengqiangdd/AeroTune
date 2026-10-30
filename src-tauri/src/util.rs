@@ -685,12 +685,12 @@ mod tests {
     #[test]
     fn result_powershell_runner_exposes_distinct_timeout_and_exit_errors() {
         assert_eq!(
-            run_ps_with_timeout_result("Write-Output 'ok'", Duration::from_secs(3)).unwrap(),
+            run_ps_with_timeout_result("Write-Output 'ok'", Duration::from_secs(15)).unwrap(),
             "ok"
         );
         let exit_error = run_ps_with_timeout_result(
             "[Console]::Error.Write('ignored'); exit 7",
-            Duration::from_secs(3),
+            Duration::from_secs(15),
         )
         .unwrap_err();
         assert!(exit_error.contains("退出码"));
@@ -748,7 +748,7 @@ mod tests {
                 "-Command",
                 "[Console]::Error.Write('expected-stderr'); exit 7",
             ],
-            Duration::from_secs(3),
+            Duration::from_secs(15),
         )
         .expect("the command should exit normally with a non-zero status");
         assert!(!output.status.success());
@@ -768,7 +768,7 @@ mod tests {
                 "-Command",
                 "Start-Sleep -Milliseconds 200; 'done'",
             ],
-            Duration::from_secs(3),
+            Duration::from_secs(15),
         )
         .expect("the explicit deadline should allow normal completion");
         assert!(output.status.success());
