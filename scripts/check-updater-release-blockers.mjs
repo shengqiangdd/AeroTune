@@ -11,6 +11,7 @@ const releaseWorkflow = readFileSync(".github/workflows/release-windows.yml", "u
 const ciWorkflow = readFileSync(".github/workflows/ci.yml", "utf8");
 
 assert.match(document, /base Tauri config remains updater-disabled by default/);
+assert.match(document, /artifact-specific measurements and limits have not been reviewed against a signed Windows release/);
 assert.match(document, /main checkout has Git metadata and an `origin`/);
 assert.doesNotMatch(document, /no `\.git` metadata or configured remote/);
 for (const gate of [
