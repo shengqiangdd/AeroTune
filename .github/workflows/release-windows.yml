@@ -27,8 +27,6 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}\src-tauri\target
       AEROTUNE_RELEASE_TAG: ${{ inputs.release_tag }}
-      AEROTUNE_UPDATE_ENDPOINT: https://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json
-      AEROTUNE_UPDATE_PUBLIC_KEY: ${{ vars.AEROTUNE_UPDATE_PUBLIC_KEY }}
 
     steps:
       - name: Check out reviewed main commit without a persisted token
@@ -79,6 +77,8 @@ jobs:
 
       - name: Create temporary updater overlay from the public key
         shell: pwsh
+        env:
+          AEROTUNE_UPDATE_PUBLIC_KEY: ${{ vars.AEROTUNE_UPDATE_PUBLIC_KEY }}
         run: |
           $overlayPath = (node scripts/create-github-updater-overlay.mjs).Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($overlayPath)) { throw "Cannot create the validated public updater overlay" }
@@ -87,6 +87,8 @@ jobs:
       - name: Build signed NSIS and Tauri updater artifacts
         run: pnpm run build:updater-release
         env:
+          AEROTUNE_UPDATE_ENDPOINT: https://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json
+          AEROTUNE_UPDATE_PUBLIC_KEY: ${{ vars.AEROTUNE_UPDATE_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
