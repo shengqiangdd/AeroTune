@@ -4,7 +4,6 @@ import fs from "node:fs";
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const pnpmLock = fs.readFileSync("pnpm-lock.yaml", "utf8");
 const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
-const updaterHelper = JSON.parse(fs.readFileSync("src-tauri/tauri.updater-helper.conf.json", "utf8"));
 const cargoToml = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
 const cargoLock = fs.readFileSync("src-tauri/Cargo.lock", "utf8");
 const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(cargoToml)?.[1];
@@ -12,7 +11,6 @@ const lockedCargoVersion = /\[\[package\]\]\s*name\s*=\s*"aerotune"\s*version\s*
 const versions = {
   package: packageJson.version,
   tauri: tauri.version,
-  updaterHelper: updaterHelper.version,
   cargo: cargoVersion,
   cargoLock: lockedCargoVersion,
 };

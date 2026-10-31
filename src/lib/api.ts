@@ -259,6 +259,8 @@ export interface ExperimentRecordInput {
     memory_used_gb: number | null;
     /** Per-metric valid observation fractions over the full one-minute window (0..1). */
     coverage: Record<string, number>;
+    /** Missing legacy context is deserializable but excluded by the backend. */
+    power_context: import("./experimentPowerContext").PowerContextSummary | null;
   };
   after?: {
     duration_ms: number;
@@ -267,6 +269,7 @@ export interface ExperimentRecordInput {
     memory_used_gb: number | null;
     /** Per-metric valid observation fractions over the full one-minute window (0..1). */
     coverage: Record<string, number>;
+    power_context: import("./experimentPowerContext").PowerContextSummary | null;
   } | null;
 }
 export interface ProcessInsightEntry {
@@ -648,12 +651,16 @@ export interface SysInfo {
 }
 export interface UpdateReadiness {
   enabled: boolean;
-  task_registered: boolean;
   reason: string | null;
 }
 export interface AvailableUpdate {
   current_version: string;
   available_version: string;
+}
+export interface WingetQueryResult {
+  output: string;
+  checked_at_unix: number;
+  duration_ms: number;
 }
 
 export const api = {
@@ -669,7 +676,9 @@ export const api = {
   relaunchAsAdmin: () => invoke<void>("relaunch_as_admin"),
   getSignedUpdateReadiness: () => invoke<UpdateReadiness>("get_signed_update_readiness"),
   checkSignedUpdate: () => invoke<AvailableUpdate | null>("check_signed_update"),
-  requestSignedUpdate: () => invoke<void>("request_signed_update"),
+  requestSignedUpdate: (expectedVersion: string) =>
+    invoke<void>("request_signed_update", { expectedVersion }),
+  checkWingetUpdates: () => invoke<WingetQueryResult>("check_winget_updates"),
   openPath: (p: string) => invoke<void>("open_path", { path: p }),
 
   listProcesses: () => invoke<ProcInfo[]>("list_processes"),
@@ -839,10 +848,10 @@ export const api = {
   setTcpAutotuning: (level: string) => invoke<void>("set_tcp_autotuning", { level }),
 
   listChanges: () => invoke<Change[]>("list_changes"),
-  revertChange: (id: number) => invoke<void>("revert_change", { id }),
-  revertChangeGroup: (groupId: number) => invoke<number>("revert_change_group", { groupId }),
-  revertAll: () => invoke<number>("revert_all"),
-  clearJournal: () => invoke<void>("clear_journal"),
+  revertChange: (expected: Change) => invoke<void>("revert_change", { expected }),
+  revertChangeGroup: (groupId: number, expected: Change[]) => invoke<number>("revert_change_group", { groupId, expected }),
+  revertAll: (expected: Change[]) => invoke<number>("revert_all", { expected }),
+  clearJournal: (expected: Change[]) => invoke<void>("clear_journal", { expected }),
 
   openSettingsPage: (page: string) => invoke<void>("open_settings_page", { page }),
 

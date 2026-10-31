@@ -16,6 +16,7 @@ import { OptimizationLab } from "../components/OptimizationLab";
 import { CpuTopologyCard } from "../components/CpuTopologyCard";
 import { ReliabilityTimeline } from "../components/ReliabilityTimeline";
 import { DiskSpaceHistoryCard } from "../components/DiskSpaceHistoryCard";
+import { anomalyTimelineLayout, formatAnomalyOffset } from "../lib/anomalyTimeline.js";
 
 const KIND_META: Record<string, { label: string; tone: "rose" | "amber" | "violet" }> = {
   cpu: { label: "CPU 异常", tone: "rose" },
@@ -43,34 +44,23 @@ const AnomalyTimeline = memo(function AnomalyTimeline({ context }: { context: An
   const onset = events.find((event) => event.kind === "onset");
   const others = events.filter((event) => event.kind !== "onset");
   if (!onset || others.length === 0) return null;
-  const times = events.map((event) => event.at_unix);
-  const minT = Math.min(...times) - 15;
-  const maxT = Math.max(onset.at_unix + 15, minT + 60);
-  const span = Math.max(1, maxT - minT);
+  const { min: minT, span, ticks } = anomalyTimelineLayout(events, onset.at_unix);
   const width = 560;
   const height = 46;
   const x = (t: number) => 8 + ((t - minT) / span) * (width - 16);
   const summary = `${others
-    .map((event) => `${TIMELINE_KIND_META[event.kind]?.label ?? event.kind}「${event.label}」`)
+    .map((event) => `${TIMELINE_KIND_META[event.kind]?.label ?? event.kind}「${event.label}」（相对起点 ${formatAnomalyOffset(event.at_unix, onset.at_unix)}）`)
     .join("、")}，均在异常起点附近`;
   return (
     <div className="mt-1" role="img" aria-label={`事件关联时间线：${summary}`}>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-11 w-full" aria-hidden="true">
         <line x1={8} y1={32} x2={width - 8} y2={32} stroke="rgba(148,163,184,0.25)" strokeWidth={1} />
-        {(() => {
-          // 分钟刻度：从窗口起点到终点，最多 6 条
-          const stepSecs = Math.max(30, Math.ceil(span / 300) * 60);
-          const ticks: number[] = [];
-          for (let t = minT + stepSecs; t < maxT && ticks.length < 6; t += stepSecs) ticks.push(t);
-          return ticks.map((t) => (
-            <g key={t}>
-              <line x1={x(t)} y1={30} x2={x(t)} y2={34} stroke="rgba(148,163,184,0.3)" strokeWidth={1} />
-              <text x={x(t)} y={44} textAnchor="middle" fontSize={8} fill="rgba(148,163,184,0.55)">
-                -{Math.max(1, Math.round((onset.at_unix - t) / 60))}分
-              </text>
-            </g>
-          ));
-        })()}
+        {ticks.map(({ time, label }) => (
+          <g key={time}>
+            <line x1={x(time)} y1={30} x2={x(time)} y2={34} stroke="rgba(148,163,184,0.3)" strokeWidth={1} />
+            <text x={x(time)} y={44} textAnchor="middle" fontSize={8} fill="rgba(148,163,184,0.55)">{label}</text>
+          </g>
+        ))}
         {others.map((event, index) => {
           const color = TIMELINE_KIND_META[event.kind]?.color ?? "#94a3b8";
           const cx = x(event.at_unix);
@@ -478,7 +468,7 @@ export function Dashboard({
             label="显卡"
             color="#34d399"
             color2="#22d3ee"
-            sub={gpuUtil == null ? (stats ? "未检测到实时数据" : "等待遥测数据…") : stats?.gpu?.temperature != null ? `${stats.gpu.temperature.toFixed(0)}°C · 3D 引擎` : "3D 引擎"}
+            sub={gpuUtil == null ? (stats ? "未检测到实时数据" : "等待遥测数据…") : stats?.gpu?.temperature != null ? `${stats.gpu.temperature.toFixed(0)}°C · GPU 利用率` : "GPU 利用率"}
           />
         </Card>
         <Card className="flex items-center justify-center py-6">

@@ -78,8 +78,8 @@ assert.match(
 );
 assert.match(
   labSource,
-  /const payload: ExperimentRecordInput\[\] = history\.map\(\(record\) => \(\{/,
-  "analysis payload derives from local history only",
+  /const payload: ExperimentRecordInput\[\] = history\.filter\(\(record\) =>\s*comparablePowerSource\(record\.baseline\.powerContext, record\.after\?\.powerContext\),\s*\)\.map\(\(record\) => \(\{/,
+  "analysis payload derives from local history after comparable power-source filtering",
 );
 
 // ---- 学习建议接入建议管线：低优先级观察类条目、上限、只导航 ----

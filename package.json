@@ -2,7 +2,7 @@
   "name": "aerotune",
   "license": "MIT",
   "private": true,
-  "version": "1.5.9",
+  "version": "1.5.10",
   "packageManager": "pnpm@11.8.0",
   "type": "module",
   "scripts": {
@@ -32,7 +32,7 @@
     "test:ux-contract": "node scripts/check-ux-contract.mjs",
     "test:elevated-test-task-contract": "node scripts/check-elevated-test-task-contract.mjs",
     "test:updater-release-contract": "node scripts/check-updater-release-contract.mjs && node scripts/check-updater-build-guard.mjs",
-    "test:signed-updater-task-contract": "node scripts/check-signed-updater-task-contract.mjs",
+    "test:github-updater-contract": "node scripts/check-github-updater-contract.mjs",
     "test:updater-release-blockers": "node scripts/check-updater-release-blockers.mjs",
     "measure:updater-artifact-bounds": "node scripts/measure-updater-artifact-bounds.mjs",
     "check:updater-release-ready": "node scripts/check-updater-release-ready.mjs",

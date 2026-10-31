@@ -10,9 +10,10 @@ AeroTune 是一款基于 **Rust、Tauri 2 和 React** 的 Windows 桌面系统�
 - **场景与自动化**：游戏、省电、编码场景；可选的自适应引擎会按识别到的场景调整部分系统参数。自动化需由用户启用，相关边界见下文和变更记录。
 - **系统管理**：进程与启动项管理、服务浏览、网络设置、存储分析、清理与系统维护工具。
 - **可审阅操作**：支持的操作会记录恢复信息；执行清理、结束进程等有影响的操作前会显示确认。并非所有系统修改都可撤销。
+- **软件更新观察**：可手动确认 WinGet 只读查询；查询可能访问软件源并更新本地缓存，不自动接受协议或安装软件，原始结果不保证完整识别。
 - **Windows 桌面集成**：系统托盘、通知、开机启动选项，以及受限的 Windows 设置快捷入口。
 
-功能和算法细节见[历史与版本记录](CHANGELOG.md)。隐私数据字段见[`DATA_PRIVACY_INVENTORY.md`](DATA_PRIVACY_INVENTORY.md)。
+功能和算法细节见[历史与版本记录](CHANGELOG.md)。隐私数据字段见[隐私清单](docs/DATA_PRIVACY_INVENTORY.md)，后续改进与验收边界见[产品路线](docs/PRODUCT_ROADMAP.md)。
 
 ## 安全与已知限制
 
@@ -25,8 +26,8 @@ AeroTune 是一款基于 **Rust、Tauri 2 和 React** 的 Windows 桌面系统�
 ## 下载与更新状态
 
 - Windows x64 NSIS 安装包采用 per-machine 安装方式，安装到受保护的 Program Files，安装需要管理员权限。
-- 当前工作区配置版本为 **1.5.9**。本地生成的 NSIS 安装器尚未获得受信任的 Authenticode 签名；请勿将它当作已验证发布者身份的正式发行包。
-- 应用内自动更新当前保持关闭。开启前仍需完成签名发布、HTTPS feed、受限下载、恢复/回滚及隔离 Windows VM 验证。详见[`docs/UPDATER.md`](docs/UPDATER.md)。
+- 当前工作区配置版本为 **1.5.10**。Windows 安装包尚无 Authenticode 签名；Tauri Minisign 更新签名不等于发布者身份，UAC 可能显示 Unknown publisher。详见 [Windows Code Signing Policy](docs/WINDOWS_CODE_SIGNING.md)。
+- 标准 Tauri + GitHub Releases 更新路径已接入。已配置受保护环境中的生产 Minisign 密钥；用户授权 early-access 发布流程：先发布并手动安装 v1.5.10 引导版，再通过应用内 GitHub 更新安装 v1.5.11。实际应用 IPC/有界下载器的 loopback .3→.4 验收已完成；线上 GitHub redirect/proxy 及取消/中断/并发/修复仍待验证。尚无公开 tag 或 Release。详见[更新设计](docs/UPDATER.md)和[发布阻塞项](docs/UPDATER_RELEASE_BLOCKERS.md)。
 
 ## 开发
 

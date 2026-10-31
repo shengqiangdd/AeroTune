@@ -340,7 +340,7 @@ pub fn apply_mode_core(mode: &str) -> Result<Vec<String>, String> {
                 // End the thread-local group before restoring so compensation cannot be
                 // mistaken for a new member of the failing group.
                 drop(group_guard.take());
-                crate::journal::revert_change_group(group_id)
+                crate::journal::rollback_change_group(group_id)
             },
         )?;
         drop(group_guard.take());
@@ -350,7 +350,7 @@ pub fn apply_mode_core(mode: &str) -> Result<Vec<String>, String> {
         mode,
         mode_group_id,
         || write_mode(mode),
-        crate::journal::revert_change_group,
+        crate::journal::rollback_change_group,
     )?;
     // A failed or rejected manual request must not suppress the automatic policy for five minutes.
     *MANUAL_HOLD.lock().unwrap() = Some(Instant::now());

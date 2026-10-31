@@ -21,6 +21,10 @@ export function capturePowerContext(stats: Stats | null | undefined): PowerConte
 export function summarizePowerContext(samples: readonly (PowerContextSample | null | undefined)[]): PowerContextSummary;
 export function isPowerContextSummary(value: unknown): value is PowerContextSummary;
 export function stablePowerSource(summary: PowerContextSummary | null | undefined): PowerSource | null;
+export function comparablePowerSource(
+  baseline: PowerContextSummary | null | undefined,
+  after: PowerContextSummary | null | undefined,
+): boolean;
 export function powerSourceChanged(
   baseline: PowerContextSummary | null | undefined,
   after: PowerContextSummary | null | undefined,

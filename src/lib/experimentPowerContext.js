@@ -82,6 +82,12 @@ export function stablePowerSource(summary) {
   return null;
 }
 
+// Cross-experiment analysis requires a known, stable and matching supply in both windows.
+export function comparablePowerSource(baseline, after) {
+  const beforeSource = stablePowerSource(baseline);
+  return beforeSource !== null && beforeSource === stablePowerSource(after);
+}
+
 export function powerSourceChanged(baseline, after) {
   const beforeSource = stablePowerSource(baseline);
   const afterSource = stablePowerSource(after);

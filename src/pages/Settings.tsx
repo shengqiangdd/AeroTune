@@ -19,7 +19,7 @@ import {
   MoonStar,
   RefreshCw,
 } from "lucide-react";
-import { api, AvailableUpdate, Change, SysInfo, ShadowStore, UpdateReadiness } from "../lib/api";
+import { api, AvailableUpdate, Change, SysInfo, ShadowStore, UpdateReadiness, WingetQueryResult } from "../lib/api";
 import { Btn, PageHead, Card, Chip, Toggle } from "../components/ui";
 import { toastOk, toastErr, toast } from "../lib/toast";
 import { fmtTime } from "../lib/format";
@@ -57,7 +57,11 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
   const [updateReadiness, setUpdateReadiness] = useState<UpdateReadiness | null>(null);
   const [updateReadinessError, setUpdateReadinessError] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const [checkingWinget, setCheckingWinget] = useState(false);
+  const [wingetResult, setWingetResult] = useState<WingetQueryResult | null>(null);
+  const [wingetError, setWingetError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const requestId = ++changesRequestId.current;
@@ -158,11 +162,35 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
   };
 
   const installSignedUpdate = async () => {
-    if (!availableUpdate) return;
+    if (!availableUpdate || installingUpdate) return;
+    const confirmed = window.confirm(
+      `将从 GitHub Releases 下载并验证 v${availableUpdate.available_version}，然后退出应用并启动 Windows 安装器。此安装器会请求 UAC 管理员确认；不会静默提权。是否继续？`,
+    );
+    if (!confirmed) return;
+    setInstallingUpdate(true);
     try {
-      await api.requestSignedUpdate();
+      await api.requestSignedUpdate(availableUpdate.available_version);
     } catch (error) {
       toastErr(error);
+      setInstallingUpdate(false);
+    }
+  };
+
+  const checkWingetUpdates = async () => {
+    if (checkingWinget) return;
+    const confirmed = window.confirm(
+      "将通过 Windows App Installer 中的 WinGet 执行只读的“list --upgrade-available”查询。该操作可能联网、更新源缓存，并按 WinGet 行为向已配置软件源发送查询或包标识；不会自动接受源协议，也不会安装或升级软件。是否继续？",
+    );
+    if (!confirmed) return;
+    setCheckingWinget(true);
+    setWingetResult(null);
+    setWingetError(null);
+    try {
+      setWingetResult(await api.checkWingetUpdates());
+    } catch (error) {
+      setWingetError(String(error));
+    } finally {
+      setCheckingWinget(false);
     }
   };
 
@@ -274,11 +302,12 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
     if (changesStatus !== "ready") return;
     if (!confirmUndoTargets([c], "即将根据本地恢复快照还原此记录。")) return;
     try {
-      await api.revertChange(c.id);
+      await api.revertChange(c);
       toastOk(`已还原：${c.desc}`);
       load();
     } catch (e) {
       toastErr(e);
+      void load();
     }
   };
 
@@ -292,7 +321,7 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
     }
     if (!confirmUndoTargets(groupChanges, `按逆序尝试还原此组中的 ${count} 条设置。`)) return;
     try {
-      const restored = await api.revertChangeGroup(groupId);
+      const restored = await api.revertChangeGroup(groupId, groupChanges);
       toastOk(`恢复胶囊已还原 ${restored} 条设置`);
     } catch (error) {
       toastErr(error);
@@ -306,9 +335,8 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
     const reversibleChanges = changes.filter((change) => change.revert.t !== "none");
     if (!confirmUndoTargets(reversibleChanges, `按逆序还原 ${reversibleChanges.length} 条支持还原的变更。`)) return;
     try {
-      const n = await api.revertAll();
+      const n = await api.revertAll(reversibleChanges);
       toastOk(`已还原 ${n} 条变更`);
-      load();
     } catch (e) {
       toastErr(e);
     } finally {
@@ -696,12 +724,11 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
             disabled={changesStatus !== "ready"}
             onClick={async () => {
               if (changesStatus !== "ready") return;
-              if (!confirm("清空将永久移除日志恢复快照，不还原任何变更。确定继续？")) return;
+              if (!confirm(`清空将永久移除当前 ${changes.length} 条日志记录及其恢复快照，不还原任何变更。日志变化时操作将取消，请刷新后重新确认。确定继续？`)) return;
               try {
-                await api.clearJournal();
-                load();
+                await api.clearJournal(changes);
                 toastOk("日志已清空（不还原任何变更）");
-              } catch (e) { toastErr(e); }
+              } catch (e) { toastErr(e); } finally { void load(); }
             }}
             className="mt-3 inline-flex items-center gap-1 text-[11px] text-slate-600 hover:text-slate-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -737,6 +764,26 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
         </div>
       </Card>
 
+      <Card className="mt-5" title="已安装软件更新观察（WinGet）" icon={<RefreshCw size={15} className="text-cyan-300" />}>
+        <div className="space-y-3 text-[12px] text-slate-400">
+          <p className="leading-5">仅在你主动确认后运行 WinGet 的只读查询。查询可能访问已配置的软件源并更新其缓存，WinGet 也可能按源行为发送查询或包标识；AeroTune 不上传或持久化结果。不接受源协议，不安装或升级软件。WinGet 的表格受系统语言与终端格式影响，AeroTune 只显示原始文本，不解析或声称更新数量完整。</p>
+          <Btn variant="ghost" disabled={checkingWinget} onClick={() => void checkWingetUpdates()}>
+            <RefreshCw size={13} className={checkingWinget ? "animate-spin" : ""} />
+            {checkingWinget ? "正在查询（最多约 90 秒）…" : "手动检查软件更新"}
+          </Btn>
+          <div aria-live="polite" aria-busy={checkingWinget}>
+            {checkingWinget && <p role="status">正在查询。若需要源协议同意、WinGet 不可用、网络失败或超时，本次会显示失败而不会报告“无更新”。</p>}
+            {wingetError && <p role="alert" className="break-words text-amber-200">无法确认软件更新状态：{wingetError}</p>}
+            {wingetResult && (
+              <div className="space-y-2">
+                <p role="status">WinGet 查询命令已成功完成 · {fmtTime(wingetResult.checked_at_unix)} · {wingetResult.duration_ms} ms。以下原始输出未经结构化解析，不代表 AeroTune 已验证所有应用或更新。</p>
+                <pre aria-label="WinGet 原始查询输出" className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-white/8 bg-slate-950/70 p-3 font-mono text-[11px] leading-5 text-slate-300">{wingetResult.output}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+
       <Card className="mt-5" title="安全更新" icon={<RefreshCw size={15} className="text-cyan-300" />}>
         <div className="flex flex-wrap items-center gap-3 text-[12px] text-slate-400" aria-live="polite">
           <span>AeroTune v{appVersion}</span>
@@ -747,13 +794,13 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
           )}
           {updateReadiness?.enabled && (
             <>
-              <span>受保护更新任务已配置；安装前会校验签名和版本。安装时应用会关闭，完成后请重新打开。</span>
-              <Btn variant="ghost" disabled={checkingUpdate} onClick={() => void checkForSignedUpdate()}>
+              <span>更新来自 GitHub Releases；下载后由 AeroTune 有界下载器校验 Tauri 签名、版本与 NSIS 压缩包。安装前需再次确认，Windows 安装器会请求 UAC；不做静默提权。</span>
+              <Btn variant="ghost" disabled={checkingUpdate || installingUpdate} onClick={() => void checkForSignedUpdate()}>
                 {checkingUpdate ? "正在检查…" : "检查更新"}
               </Btn>
               {availableUpdate && (
-                <Btn variant="primary" onClick={() => void installSignedUpdate()}>
-                  安装 v{availableUpdate.available_version}（安装时应用会关闭）
+                <Btn variant="primary" disabled={installingUpdate} onClick={() => void installSignedUpdate()}>
+                  {installingUpdate ? "正在下载并启动安装器…" : `安装 v${availableUpdate.available_version}`}
                 </Btn>
               )}
             </>

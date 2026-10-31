@@ -100,7 +100,14 @@ assert.match(journal, /change_identities_reject_js_unsafe_record_and_group_ids/)
 assert.match(journal, /group_lookup_cannot_escape_selected_group_on_duplicate_ids/);
 assert.match(journal, /fn find_unique_change_index\([\s\S]*?matches\.next\(\)\.is_some\(\)/);
 assert.match(journal, /fn find_group_change_index\([\s\S]*?change\.group_id == Some\(group_id\)/);
-assert.match(journal, /let idx = find_unique_change_index\(&j\.changes, id\)\?/);
+assert.match(journal, /let idx = find_unique_change_index\(&j\.changes, expected\.id\)/);
+assert.match(journal, /pub fn revert_change_group\(group_id: u64, expected: Vec<Change>\)/);
+assert.match(journal, /ensure_confirmed_snapshot\(&targets, expected\)\?/);
+assert.match(journal, /pub fn revert_all\(expected: Vec<Change>\)[\s\S]*?ensure_confirmed_snapshot\(&targets, &expected\)\?[\s\S]*?restore_at/);
+assert.match(journal, /pub fn clear_journal\(expected: Vec<Change>\)[\s\S]*?ensure_confirmed_snapshot\(&j\.changes, &expected\)\?[\s\S]*?std::mem::take/);
+assert.match(settings, /api\.revertChangeGroup\(groupId, groupChanges\)/);
+assert.match(settings, /api\.revertAll\(reversibleChanges\)/);
+assert.match(settings, /api\.clearJournal\(changes\)/);
 assert.match(journal, /find_group_change_index\(&journal\.changes, group_id, id\)/);
 assert.match(settings, /变更日志不可用，无法确认是否为空/);
 assert.match(settings, /恢复操作已禁用/);

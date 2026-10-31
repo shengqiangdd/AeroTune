@@ -1,30 +1,41 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { hasConfiguredSigningKey, hasUpdaterPermission, readCapabilityFiles, readUpdaterReleaseConfigFile, updaterIsEnabled, validateUpdaterReleaseConfig } from "./updaterReleasePolicy.mjs";
+import {
+  hasConfiguredSigningKey,
+  hasUpdaterPermission,
+  readCapabilityFiles,
+  readUpdaterReleaseConfigFile,
+  updaterIsEnabled,
+  validateUpdaterReleaseConfig,
+} from "./updaterReleasePolicy.mjs";
 
 const baseConfigPath = resolve("src-tauri/tauri.conf.json");
 const baseConfig = JSON.parse(readFileSync(baseConfigPath, "utf8"));
+const updaterSource = readFileSync("src-tauri/src/updater.rs", "utf8");
 const capabilityDirectory = resolve("src-tauri/capabilities");
 const capabilityFiles = readCapabilityFiles(capabilityDirectory);
 const hasUpdaterCapability = hasUpdaterPermission(baseConfig?.app?.security?.capabilities)
   || capabilityFiles.some((file) => hasUpdaterPermission(file.content));
 const overlayPath = process.env.AEROTUNE_UPDATER_CONFIG?.trim();
 const required = process.argv.includes("--required");
-const disabledPrerequisites = [
-  "published HTTPS feed, Tauri public key, and protected private signing key (key-vault/file ACL policy review still required)",
-  "review and measurement of the vendored 256 KiB feed-manifest cap; gate remains off",
-  "direct-route DNS pinning or a reviewed system-proxy egress allowlist/rebinding defense for feed/artifact hosts",
-  "disposable-Windows-VM validation of preserved system-proxy routing, origin-DNS behavior, and fail-closed fallback",
-  "reviewed compressed/expanded artifact byte caps, release-ready bounded downloader, exact-byte signature verification, and protected staging",
-  "audited fixed elevated runner/task, task DACL/runtime attestation, and registration approval",
-  "protected ProgramData provisioner, external recovery supervisor, and crash-safe rollback path",
-  "disposable-VM upgrade, interrupted-install, and rollback validation",
-  "supported task principal for standard-user sessions (current scaffold is same-admin-account only)",
+const acceptanceGates = [
+  "UPDATE_FEED_RESPONSE_BOUNDED_READY",
+  "UPDATE_PROXY_POLICY_READY",
+  "UPDATE_BOUNDED_DOWNLOAD_READY",
+  "GITHUB_RELEASE_HOST_POLICY_REVIEWED",
+  "GITHUB_RELEASE_WINDOWS_ACCEPTED",
+];
+const githubUpdaterAcceptanceReady = acceptanceGates.every((name) =>
+  new RegExp(`const ${name}: bool = true;`).test(updaterSource),
+);
+const earlyAccessRisks = [
+  "the first live GitHub HTTPS redirect and system-proxy path will be observed during the v1.5.11 acceptance",
+  "UAC cancellation, concurrent launch during NSIS, interrupted/file-in-use recovery, and installer repair remain untested; the owner explicitly authorized early access",
 ];
 
 if (!overlayPath) {
   if (hasUpdaterCapability) {
-    console.error("FAIL: updater plugin permissions are present in a capability; the normal app must not expose updater commands.");
+    console.error("FAIL: updater plugin permissions are present in a capability; the Rust IPC façade must remain the only updater surface.");
     process.exit(1);
   }
   if (updaterIsEnabled(baseConfig)) {
@@ -32,16 +43,21 @@ if (!overlayPath) {
     process.exit(1);
   }
   if (required) {
-    console.error("FAIL: AEROTUNE_UPDATER_CONFIG is required for a signed-updater release.");
-    console.error("Remaining prerequisites before enabling signed updates:");
-    for (const prerequisite of disabledPrerequisites) console.error(`- ${prerequisite}`);
-    console.error("See docs/UPDATER.md for the reviewed sequence; do not bypass UAC or task registration gates.");
+    console.error("FAIL: AEROTUNE_UPDATER_CONFIG is required for a signed GitHub-updater release.");
+    if (githubUpdaterAcceptanceReady) {
+      console.error("Release gates are owner-authorized for early access; residual tests remain:");
+      for (const risk of earlyAccessRisks) console.error(`- ${risk}`);
+    } else {
+      console.error("Required updater acceptance gates are not all approved.");
+    }
     process.exit(1);
   }
-  console.log("PASS updater remains disabled: signed release configuration, bounded feed/artifact handling, DNS and system-proxy policy, and audited elevated runner are not ready.");
-  console.log("Remaining prerequisites:");
-  for (const prerequisite of disabledPrerequisites) console.log(`- ${prerequisite}`);
-  console.log("See docs/UPDATER.md; update and task-registration gates remain off.");
+  console.log("PASS base config remains updater-disabled; a signed release overlay and matching key from the protected GitHub release environment are required.");
+  if (githubUpdaterAcceptanceReady) {
+    for (const risk of earlyAccessRisks) console.log(`EARLY-ACCESS RISK: ${risk}`);
+  } else {
+    console.log("Updater release gates remain disabled pending acceptance.");
+  }
   process.exit(0);
 }
 
@@ -55,15 +71,9 @@ try {
 
 const result = validateUpdaterReleaseConfig(baseConfig, overlay, {
   privateKeyPresent: hasConfiguredSigningKey(process.env),
-  signingKeyProtectionReady: false,
   runtimeEndpoint: process.env.AEROTUNE_UPDATE_ENDPOINT?.trim(),
   runtimePublicKey: process.env.AEROTUNE_UPDATE_PUBLIC_KEY?.trim(),
-  pipelineReady: false,
-  feedResponseBoundedReady: false,
-  dnsDestinationPolicyReady: false,
-  proxyPolicyReady: false,
-  boundedDownloadReady: false,
-  elevatedRunnerReady: false,
+  githubUpdaterAcceptanceReady,
   capabilityFiles,
 });
 for (const warning of result.warnings) console.warn(`WARN: ${warning}`);
@@ -72,4 +82,4 @@ if (result.errors.length) {
   process.exit(1);
 }
 
-console.log("PASS updater release prerequisites validated; signing material was not printed.");
+console.log("PASS GitHub updater release prerequisites validated; signing material was not printed.");

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   capturePowerContext,
+  comparablePowerSource,
   isPowerContextSummary,
   powerSourceChanged,
   stablePowerSource,
@@ -65,6 +66,14 @@ assert.equal(stablePowerSource(mixed), null, "mixed windows are descriptive, not
 assert.equal(stablePowerSource(unknown), null);
 assert.equal(stablePowerSource(tooShort), null);
 assert.equal(stablePowerSource(empty), null);
+assert.equal(comparablePowerSource(stableAc, stableAc), true);
+assert.equal(comparablePowerSource(stableBattery, stableBattery), true);
+assert.equal(comparablePowerSource(stableAc, stableBattery), false);
+assert.equal(comparablePowerSource(stableAc, mixed), false);
+assert.equal(comparablePowerSource(stableAc, unknown), false);
+assert.equal(comparablePowerSource(stableAc, tooShort), false);
+assert.equal(comparablePowerSource(undefined, stableAc), false);
+assert.equal(comparablePowerSource(stableAc, undefined), false);
 assert.equal(powerSourceChanged(stableAc, stableBattery), true);
 assert.equal(powerSourceChanged(stableAc, stableAc), false);
 assert.equal(powerSourceChanged(stableAc, mixed), false);
@@ -81,6 +90,16 @@ assert.match(lab, /Windows 能效态：/);
 assert.match(lab, /grid gap-2 sm:grid-cols-2/);
 assert.match(lab, /break-words text-\[10px\]/);
 assert.match(lab, /role="note" className/);
+assert.match(lab, /history\.filter\(\(record\) =>\s*comparablePowerSource\(record\.baseline\.powerContext, record\.after\?\.powerContext\)/);
+assert.match(lab, /来源不同、混合、未知或旧记录缺失上下文时排除/);
 assert.match(lab, /analyzeExperimentConsistency\(payload\)/);
+assert.match(lab, /power_context: record\.baseline\.powerContext \?\? null/);
+assert.match(lab, /power_context: record\.after\.powerContext \?\? null/);
+const api = readFileSync("src/lib/api.ts", "utf8");
+assert.equal((api.match(/power_context: import\("\.\/experimentPowerContext"\)\.PowerContextSummary \| null/g) ?? []).length, 2);
+const backend = readFileSync("src-tauri/src/experiment_insight.rs", "utf8");
+assert.match(backend, /pub power_context: Option<PowerContextInput>/);
+assert.match(backend, /source\.is_none\(\) \|\| source != stable_power_source\(after\)/);
+assert.match(backend, /context\.sample_count != window\.sample_count/);
 
 console.log("Experiment power context passed: AC/DC capture, unknown handling, stable comparison, legacy history, and read-only wording");

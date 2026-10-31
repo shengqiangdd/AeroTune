@@ -216,9 +216,84 @@ fn verify_system_executable(path: PathBuf) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn is_app_installer_package_directory(name: &str) -> bool {
+    const PREFIX: &str = "Microsoft.DesktopAppInstaller_";
+    const PUBLISHER_ID: &str = "_8wekyb3d8bbwe";
+    name.strip_prefix(PREFIX)
+        .and_then(|version| version.strip_suffix(PUBLISHER_ID))
+        .is_some_and(|version| {
+            version
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+                && !version.contains("..")
+                && version
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+}
+
+fn resolve_winget_executable() -> Result<PathBuf, String> {
+    const LOOKUP: &str = "$package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller | Select-Object -First 1; if ($null -ne $package) { [Console]::Out.Write($package.InstallLocation) }";
+    let output = command_output_with_timeout(
+        "powershell",
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            LOOKUP,
+        ],
+        Duration::from_secs(10),
+    )
+    .map_err(|error| format!("无法定位 Windows App Installer（WinGet）: {error}"))?;
+    if !output.status.success() || output.stdout.truncated || output.stderr.truncated {
+        return Err("无法从当前用户的 App Installer 包信息中定位 WinGet；不会回退到 PATH".into());
+    }
+    let location = decode_process_output(&output.stdout.bytes);
+    let location = PathBuf::from(location.trim());
+    let location = location
+        .canonicalize()
+        .map_err(|_| "App Installer 安装目录不可访问".to_string())?;
+    let package_name = location
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "App Installer 包目录名称无效".to_string())?;
+    if !is_app_installer_package_directory(package_name) {
+        return Err("App Installer 包身份不符合预期；拒绝启动 WinGet".into());
+    }
+
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    let trusted_root = program_files_directories()?
+        .into_iter()
+        .filter_map(|directory| directory.canonicalize().ok())
+        .map(|directory| directory.join("WindowsApps"))
+        .any(|directory| {
+            let Ok(metadata) = std::fs::symlink_metadata(&directory) else {
+                return false;
+            };
+            metadata.is_dir()
+                && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+                && location.starts_with(directory)
+        });
+    if !trusted_root {
+        return Err("App Installer 不在受保护的 WindowsApps 目录；拒绝启动 WinGet".into());
+    }
+    let executable = location
+        .join("winget.exe")
+        .canonicalize()
+        .map_err(|_| "当前 App Installer 包未提供 WinGet 可执行文件".to_string())?;
+    if !executable.starts_with(&location) {
+        return Err("WinGet 可执行文件越过 App Installer 包目录；拒绝启动".into());
+    }
+    verify_system_executable(executable)
+}
+
 fn resolve_executable(program: &str) -> Result<PathBuf, String> {
     let name = program.to_ascii_lowercase();
     let system_directory = match name.as_str() {
+        "winget" | "winget.exe" => return resolve_winget_executable(),
         "powershell" | "powershell.exe" => {
             return verify_system_executable(
                 windows_system_directory()?
@@ -257,6 +332,7 @@ fn default_command_timeout(program: &str) -> Duration {
     match name.as_str() {
         "powercfg" | "powercfg.exe" => Duration::from_secs(3),
         "powershell" | "powershell.exe" => Duration::from_secs(15),
+        "winget" | "winget.exe" => Duration::from_secs(90),
         _ => Duration::from_secs(30),
     }
 }
@@ -621,6 +697,41 @@ pub fn safe_id(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn winget_package_identity_is_narrowly_allowlisted() {
+        assert!(is_app_installer_package_directory(
+            "Microsoft.DesktopAppInstaller_1.26.430.0_x64__8wekyb3d8bbwe"
+        ));
+        assert!(is_app_installer_package_directory(
+            "Microsoft.DesktopAppInstaller_1.26.430.0_neutral__8wekyb3d8bbwe"
+        ));
+        for path in [
+            "Microsoft.DesktopAppInstaller_1.26.430.0_x64__attacker",
+            "Microsoft.DesktopAppInstaller_1.26.430.0_x64__8wekyb3d8bbwe\\..\\evil",
+            "Microsoft.DesktopAppInstaller_.._8wekyb3d8bbwe",
+            "Microsoft.DesktopAppInstaller__8wekyb3d8bbwe",
+            "OtherPackage_1.0.0.0_x64__8wekyb3d8bbwe",
+        ] {
+            assert!(!is_app_installer_package_directory(path), "{path}");
+        }
+    }
+
+    #[test]
+    #[ignore = "live read-only App Installer package discovery; does not invoke WinGet queries"]
+    fn live_winget_resolver_uses_the_protected_app_installer_package() {
+        let executable = resolve_winget_executable().expect("App Installer package should resolve");
+        assert_eq!(
+            executable.file_name().and_then(|name| name.to_str()),
+            Some("winget.exe")
+        );
+        assert!(executable
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(is_app_installer_package_directory));
+        assert!(executable.to_string_lossy().contains("\\WindowsApps\\"));
+    }
 
     #[test]
     fn roaming_app_data_resolves_through_the_windows_known_folder_api() {

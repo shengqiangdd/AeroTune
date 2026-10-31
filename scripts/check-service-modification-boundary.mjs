@@ -45,7 +45,7 @@ assert.ok(restoreTarget);
 assert.match(restoreTarget, /service_scm_account_matches\(name, &account\)/);
 assert.match(setter, /begin_change_group/);
 assert.match(setter, /apply_service_startup_pair/);
-assert.match(setter, /revert_change_group\(group_id\)/);
+assert.match(setter, /rollback_change_group\(group_id\)/);
 assert.match(services, /service_startup_pair_rolls_back_first_write_when_second_fails/);
 assert.match(services, /service_startup_pair_reports_rollback_failure_and_stops_after_first_error/);
 assert.match(journal, /pub fn id\(&self\) -> u64/);

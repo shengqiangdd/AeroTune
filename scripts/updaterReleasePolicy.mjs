@@ -22,6 +22,7 @@ const RESERVED_DNS_SUFFIXES = [
 ];
 const UPDATER_PERMISSION = /\bupdater:[a-z0-9_-]+/i;
 const MAX_UPDATER_RELEASE_CONFIG_BYTES = 64 * 1024;
+const GITHUB_RELEASE_ENDPOINT = "https://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json";
 const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function decodeStrictBase64(value) {
@@ -207,20 +208,14 @@ export function updaterIsEnabled(config) {
 }
 
 /**
- * Validates an optional Tauri updater config overlay for AeroTune's protected per-machine install.
- * This only checks configuration prerequisites; it does not implement or prove the privileged runner.
+ * Validates the standard Tauri updater overlay for the fixed AeroTune GitHub Release feed.
+ * The caller must separately run code contracts and use a protected CI environment for signing.
  */
 export function validateUpdaterReleaseConfig(baseConfig, overlay, {
   privateKeyPresent,
-  signingKeyProtectionReady = false,
   runtimeEndpoint,
   runtimePublicKey,
-  pipelineReady = false,
-  feedResponseBoundedReady = false,
-  dnsDestinationPolicyReady = false,
-  proxyPolicyReady = false,
-  boundedDownloadReady = false,
-  elevatedRunnerReady = false,
+  githubUpdaterAcceptanceReady = false,
   capabilityFiles = [],
 } = {}) {
   const errors = [];
@@ -253,7 +248,7 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
       }
     }
     if (Object.hasOwn(config, "mainBinaryName")) {
-      errors.push(`${label} must not override mainBinaryName; the fixed AeroTune executable is required by the protected task.`);
+      errors.push(`${label} must not override mainBinaryName; the fixed AeroTune executable is required by the signed NSIS bundle.`);
     }
     for (const key of ["productName", "identifier", "version"]) {
       if (label === "release overlay" && Object.hasOwn(config, key) && config[key] !== baseConfig?.[key]) {
@@ -382,7 +377,9 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
 
   if (!updaterIsEnabled(overlay)) errors.push("Updater artifacts and plugins.updater must both be configured in the release overlay.");
   if (!privateKeyPresent) errors.push("Configure exactly one non-placeholder TAURI_SIGNING_PRIVATE_KEY input (inline secret or a non-empty regular non-symlink file outside the repository) or a TAURI_SIGNING_PRIVATE_KEY_PATH file with those same file requirements; signed updater artifacts cannot be produced otherwise.");
-  if (!signingKeyProtectionReady) errors.push("Private signing-key secret-store/file ACL protection has not been audited; updater release remains disabled.");
+  if (!githubUpdaterAcceptanceReady) {
+    errors.push("The fixed GitHub updater remains fail-closed until bounded feed/artifact handling, host/redirect and system-proxy policy, and standard-user Windows UAC acceptance are approved in source contracts.");
+  }
 
   const publicKey = String(updater?.pubkey ?? "").trim();
   if (isPlaceholder(publicKey) || /PRIVATE KEY/i.test(publicKey)) {
@@ -404,6 +401,9 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
   } else {
     for (const endpoint of endpoints) {
       try {
+        if (endpoint !== GITHUB_RELEASE_ENDPOINT) {
+          errors.push("Updater endpoint must use the fixed AeroTune GitHub Releases latest.json URL.");
+        }
         const parsed = new URL(endpoint);
         const rawHostname = parsed.hostname;
         const hostname = normalizeHostname(rawHostname);
@@ -430,15 +430,13 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
   }
 
   if (Array.isArray(endpoints)) {
-    if (endpoints.length !== 1) errors.push("The current protected runner supports exactly one fixed update endpoint.");
+    if (endpoints.length !== 1) errors.push("The standard GitHub updater requires exactly one fixed update endpoint.");
     if (runtimeEndpoint !== endpoints[0]) errors.push("AEROTUNE_UPDATE_ENDPOINT must exactly match the release overlay endpoint.");
   }
   if (runtimePublicKey !== publicKey) errors.push("AEROTUNE_UPDATE_PUBLIC_KEY must exactly match plugins.updater.pubkey.");
-  if (!pipelineReady) errors.push("The code-level updater gate remains disabled until rollback and privileged validation are complete.");
-  if (!feedResponseBoundedReady) errors.push("The vendored 256 KiB feed-manifest cap is a prototype and has not passed release review or feed-size measurement; updater release remains disabled.");
-  if (!dnsDestinationPolicyReady) errors.push("Direct-route DNS destination pinning or a reviewed system-proxy egress allowlist/rebinding defense is not implemented; updater release remains disabled.");
-  if (!proxyPolicyReady) errors.push("The selected policy preserves Windows system proxy, but its routing, origin-DNS behavior, and fail-closed fallback have not passed disposable-VM validation; updater release remains disabled.");
-  if (!boundedDownloadReady) errors.push("Reviewed artifact byte caps, a release-ready bounded downloader, exact-byte signature verification, and protected staging are not complete; updater release remains disabled.");
+  if (runtimeEndpoint !== GITHUB_RELEASE_ENDPOINT) {
+    errors.push("AEROTUNE_UPDATE_ENDPOINT must be the fixed AeroTune GitHub Releases latest.json URL.");
+  }
 
   if (updater && Object.hasOwn(updater, "dangerousInsecureTransportProtocol")
     && updater.dangerousInsecureTransportProtocol !== false) {
@@ -470,8 +468,8 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
       && (!Array.isArray(windows.installerArgs) || windows.installerArgs.length !== 0)) {
       errors.push("plugins.updater.windows.installerArgs must remain an empty array to protect the fixed Program Files target.");
     }
-    if (Object.hasOwn(windows, "installMode") && windows.installMode !== "quiet") {
-      errors.push("plugins.updater.windows.installMode must remain quiet for the already-elevated fixed runner.");
+    if (Object.hasOwn(windows, "installMode") && windows.installMode !== "passive") {
+      errors.push("plugins.updater.windows.installMode must be passive so the per-machine installer can request UAC.");
     }
   }
 
@@ -502,11 +500,11 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
   }
   const bundleAllowDowngrades = baseConfig?.bundle?.windows?.allowDowngrades;
   if (bundleAllowDowngrades !== false) {
-    errors.push("bundle.windows.allowDowngrades must be false; rollback must use a separate protected restore path.");
+    errors.push("bundle.windows.allowDowngrades must be false; update releases must not install an older app version.");
   }
   const overlayBundleAllowDowngrades = overlay?.bundle?.windows?.allowDowngrades;
   if (overlayBundleAllowDowngrades !== undefined && overlayBundleAllowDowngrades !== false) {
-    errors.push("The release overlay must not enable bundle.windows.allowDowngrades; old installers are not a rollback mechanism.");
+    errors.push("The release overlay must not enable bundle.windows.allowDowngrades; publish fixes as a higher version.");
   }
 
   const baseNsis = baseConfig?.bundle?.windows?.nsis;
@@ -540,27 +538,24 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
     }
     if (nsis.installMode !== "perMachine") {
       errors.push(label === "base"
-        ? "The protected AeroTune updater design requires the base NSIS installMode to remain perMachine."
+        ? "The standard AeroTune updater requires the base NSIS installMode to remain perMachine."
         : "Any release NSIS overlay must explicitly preserve installMode perMachine.");
     }
   }
   const installMode = baseNsis?.installMode;
   const baseTargets = baseConfig?.bundle?.targets;
   if (!Array.isArray(baseTargets) || baseTargets.length !== 1 || baseTargets[0] !== "nsis") {
-    errors.push("The base bundle.targets must be exactly [\"nsis\"] for the protected updater installer.");
+    errors.push("The base bundle.targets must be exactly [\"nsis\"] for the AeroTune updater release installer.");
   }
   const overlayTargets = overlay?.bundle?.targets;
   if (!Array.isArray(overlayTargets) || overlayTargets.length !== 1 || overlayTargets[0] !== "nsis") {
-    errors.push("The protected updater release overlay must explicitly target only the NSIS installer.");
+    errors.push("The standard updater release overlay must explicitly target only the NSIS installer.");
   }
-  if (updater?.windows?.installMode !== "quiet") {
-    errors.push("A per-machine update runner must use quiet installer mode only after it is already elevated.");
-  }
-  if (!elevatedRunnerReady) {
-    errors.push("The protected runner/task, rollback path, and privileged Windows validation are not all complete and audited yet.");
+  if (updater?.windows?.installMode !== "passive") {
+    errors.push("The standard per-machine updater must use passive mode so the installer can show progress and request UAC.");
   }
   if (installMode === "perMachine" && updater?.windows?.installMode === "passive") {
-    warnings.push("passive only changes UI; a standard-user per-machine update still needs UAC.");
+    warnings.push("The standard Tauri updater stages the signed package under the current user's temp directory; it does not provide AeroTune's former crash-safe rollback. The per-machine installer must request UAC.");
   }
 
   return { enabled: updaterIsEnabled(overlay), errors, warnings };

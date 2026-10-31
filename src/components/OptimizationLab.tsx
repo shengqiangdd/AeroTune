@@ -5,6 +5,7 @@ import type { Stats } from "../lib/api";
 import type { StatsStatus } from "../hooks/useStats";
 import { effectivePowerModePresentation } from "../lib/effectivePowerMode.js";
 import {
+  comparablePowerSource,
   isPowerContextSummary,
   powerSourceChanged,
   stablePowerSource,
@@ -502,6 +503,7 @@ const ExperimentHistoryView = memo(function ExperimentHistoryView({
             ))}
           </ul>
         )}
+        <p className="mt-3 text-[11px] leading-4 text-slate-400">跨实验一致性分析仅纳入两窗口供电来源均稳定且相同的完整记录；来源不同、混合、未知或旧记录缺失上下文时排除，但仍可在历史中查看。此筛选不保证其他实验条件相同，也不证明因果。</p>
         <p className="mt-3 text-[10px] leading-4 text-slate-600">本地历史仅保存聚合指标、电源来源与 Windows 能效态计数、窗口时长、样本数和模式名称；上限 {HISTORY_LIMIT} 条，可逐条删除或清空。待续草稿临时保存在当前会话存储，自动过期且不含进程名称、路径或设备标识。</p>
       </Card>
 
@@ -572,7 +574,9 @@ export function OptimizationLab({ stats, statsStatus }: { stats: Stats | null; s
   // 无状态、不落盘；结论仅供观察，AeroTune 不据此调整任何参数。
   useEffect(() => {
     let disposed = false;
-    const payload: ExperimentRecordInput[] = history.map((record) => ({
+    const payload: ExperimentRecordInput[] = history.filter((record) =>
+      comparablePowerSource(record.baseline.powerContext, record.after?.powerContext),
+    ).map((record) => ({
       mode: record.mode,
       status: record.status,
       baseline: {
@@ -581,6 +585,7 @@ export function OptimizationLab({ stats, statsStatus }: { stats: Stats | null; s
         cpu_pct: record.baseline.cpuPct,
         memory_used_gb: record.baseline.memoryUsedGb,
         coverage: analyzerCoverage(record.baseline),
+        power_context: record.baseline.powerContext ?? null,
       },
       after: record.after
         ? {
@@ -589,6 +594,7 @@ export function OptimizationLab({ stats, statsStatus }: { stats: Stats | null; s
             cpu_pct: record.after.cpuPct,
             memory_used_gb: record.after.memoryUsedGb,
             coverage: analyzerCoverage(record.after),
+            power_context: record.after.powerContext ?? null,
           }
         : null,
     }));

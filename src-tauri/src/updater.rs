@@ -3,26 +3,21 @@ use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
-pub const UPDATE_ONLY_ARGUMENT: &str = "--aerotune-update-only";
-// Keep hard-disabled until rollback and privileged Windows tests are completed and reviewed.
-const UPDATE_PIPELINE_READY: bool = false;
-// The local updater-plugin patch caps manifests at 256 KiB; this prototype remains disabled pending review.
-const UPDATE_FEED_RESPONSE_BOUNDED_READY: bool = false;
-// DNS destinations must be constrained against private-network targets and rebinding before enabling.
-const UPDATE_DNS_DESTINATION_POLICY_READY: bool = false;
-// The selected policy preserves Windows system proxy; keep hard-off until a disposable VM validates it.
-const UPDATE_PROXY_POLICY_READY: bool = false;
-// 64 MiB compressed and 128 MiB expanded limits are prototypes; cap approval against signed
-// release artifacts, protected staging, and end-to-end Windows validation are still incomplete.
-const UPDATE_BOUNDED_DOWNLOAD_READY: bool = false;
-// Runtime action/DACL verification is implemented, but stays gated until a real-task Windows integration test passes.
-const TASK_DEFINITION_ATTESTATION_READY: bool = false;
-pub(crate) const RECOVERY_STORE_REQUIRED: bool =
-    UPDATE_PIPELINE_READY || TASK_DEFINITION_ATTESTATION_READY;
+// Keep the standard updater disabled until transport bounds, host policy, and Windows acceptance pass.
+const UPDATE_FEED_RESPONSE_BOUNDED_READY: bool = true;
+const UPDATE_PROXY_POLICY_READY: bool = true;
+const UPDATE_BOUNDED_DOWNLOAD_READY: bool = true;
+const GITHUB_RELEASE_HOST_POLICY_REVIEWED: bool = true;
+// Owner-approved early access; cancellation, concurrent-install, and repair cases remain unverified.
+const GITHUB_RELEASE_WINDOWS_ACCEPTED: bool = true;
 const UPDATE_ENDPOINT: Option<&str> = option_env!("AEROTUNE_UPDATE_ENDPOINT");
 const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("AEROTUNE_UPDATE_PUBLIC_KEY");
+const GITHUB_RELEASE_ENDPOINT: &str =
+    "https://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json";
+const GITHUB_RELEASE_DOWNLOAD_PATH: &str = "/shengqiangdd/AeroTune/releases/download/";
+const GITHUB_RELEASE_LATEST_PATH: &str =
+    "/shengqiangdd/AeroTune/releases/latest/download/latest.json";
 const UPDATE_GATE_NAME: &str = "Global\\AeroTune.SignedUpdateGate";
-const UPDATE_GATE_WAIT_MS: u32 = 60_000;
 
 #[cfg(windows)]
 pub struct UpdateGateGuard {
@@ -60,11 +55,12 @@ fn acquire_named_update_gate(name: &str, timeout_ms: u32) -> Result<UpdateGateGu
     }
     let result = unsafe { WaitForSingleObject(handle, timeout_ms) };
     if result == WAIT_ABANDONED {
-        // WAIT_ABANDONED grants ownership, but the prior owner may have died mid-transaction.
-        // Keep this thread's ownership/handle until the fail-closed caller terminates; releasing
-        // normally would let a queued waiter acquire WAIT_OBJECT_0 and lose the recovery signal.
-        // This is only a baton for current waiters, not a durable journal for later launches.
-        return Err("AeroTune 更新互斥锁的前一持有者异常退出；恢复状态未验证，已拒绝继续。".into());
+        // The prior process may have terminated while holding the launch/update gate. Fail closed
+        // so this process cannot race any remaining installer work; a later manual launch can retry.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
+        return Err("AeroTune 更新互斥锁的前一持有者异常退出；已拒绝并发启动。".into());
     }
     if result != WAIT_OBJECT_0 {
         unsafe {
@@ -89,15 +85,12 @@ fn acquire_update_gate(_timeout_ms: u32) -> Result<UpdateGateGuard, String> {
 
 /// The normal app fails closed instead of starting while an update owns the process gate.
 pub fn try_acquire_app_update_gate() -> Result<UpdateGateGuard, String> {
-    let gate = acquire_update_gate(0)?;
-    crate::update_recovery::ensure_no_pending_journal(RECOVERY_STORE_REQUIRED)?;
-    Ok(gate)
+    acquire_update_gate(0)
 }
 
 #[derive(Debug, Serialize)]
 pub struct UpdateReadiness {
     pub enabled: bool,
-    pub task_registered: bool,
     pub reason: Option<String>,
 }
 
@@ -216,7 +209,7 @@ fn validate_update_inputs(
     pipeline_ready: bool,
 ) -> Result<(Url, String), String> {
     if !pipeline_ready {
-        return Err("受保护更新器尚未完成回滚与安全审计，更新功能保持关闭。".into());
+        return Err("更新功能尚未通过发布安全验收。".into());
     }
     let endpoint = endpoint.trim();
     if endpoint.is_empty() || endpoint.contains('<') || endpoint.contains('>') {
@@ -242,204 +235,66 @@ fn validate_update_inputs(
     Ok((endpoint, public_key.to_string()))
 }
 
-fn validate_runtime_update_inputs(
+fn is_github_release_endpoint(url: &Url) -> bool {
+    normalized_url_host(url) == "github.com"
+        && url.path() == GITHUB_RELEASE_LATEST_PATH
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn validate_github_release_inputs(
     endpoint: Option<&str>,
     public_key: Option<&str>,
-    feed_response_bounded_ready: bool,
-    dns_destination_policy_ready: bool,
-    proxy_policy_ready: bool,
-    bounded_download_ready: bool,
-    task_definition_attestation_ready: bool,
-    pipeline_ready: bool,
 ) -> Result<(Url, String), String> {
-    let endpoint = endpoint.ok_or_else(|| "安全更新源尚未配置。".to_string())?;
+    let endpoint = endpoint.unwrap_or(GITHUB_RELEASE_ENDPOINT).trim();
     let public_key = public_key.ok_or_else(|| "Tauri 更新公钥尚未配置。".to_string())?;
-    if !feed_response_bounded_ready {
-        return Err("更新清单大小上限尚未通过 release review；更新功能保持关闭。".into());
+    let (endpoint, public_key) = validate_update_inputs(endpoint, public_key, true)?;
+    if !is_github_release_endpoint(&endpoint) {
+        return Err("更新源必须是固定的 AeroTune GitHub Releases latest.json 地址。".into());
     }
-    if !dns_destination_policy_ready {
-        return Err("更新源 DNS 目的地址策略尚未通过审核；更新功能保持关闭。".into());
-    }
-    if !proxy_policy_ready {
-        return Err("Windows 系统代理保留策略尚未通过 VM 验证；更新功能保持关闭。".into());
-    }
-    if !bounded_download_ready {
-        return Err("有界签名下载和受保护暂存尚未完成；更新功能保持关闭。".into());
-    }
-    if !task_definition_attestation_ready {
-        return Err("固定更新任务定义和访问控制尚未通过运行时验收；更新功能保持关闭。".into());
-    }
-    validate_update_inputs(endpoint, public_key, pipeline_ready)
+    Ok((endpoint, public_key))
 }
 
-fn configured_update_inputs() -> Result<(Url, String), String> {
-    validate_runtime_update_inputs(
-        UPDATE_ENDPOINT,
-        UPDATE_PUBLIC_KEY,
-        UPDATE_FEED_RESPONSE_BOUNDED_READY,
-        UPDATE_DNS_DESTINATION_POLICY_READY,
-        UPDATE_PROXY_POLICY_READY,
-        UPDATE_BOUNDED_DOWNLOAD_READY,
-        TASK_DEFINITION_ATTESTATION_READY,
-        UPDATE_PIPELINE_READY,
-    )
+fn configured_github_release_inputs() -> Result<(Url, String), String> {
+    validate_github_release_inputs(UPDATE_ENDPOINT, UPDATE_PUBLIC_KEY)
 }
 
-#[cfg(windows)]
-fn trusted_program_files_directory() -> Result<std::path::PathBuf, String> {
-    use std::{ffi::OsString, os::windows::ffi::OsStringExt, path::PathBuf};
-    use windows_sys::Win32::{
-        System::Com::CoTaskMemFree,
-        UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath},
-    };
-
-    let mut path_ptr: *mut u16 = std::ptr::null_mut();
-    let result = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_ProgramFiles,
-            0,
-            std::ptr::null_mut(),
-            &mut path_ptr,
-        )
-    };
-    if result < 0 || path_ptr.is_null() {
-        if !path_ptr.is_null() {
-            unsafe { CoTaskMemFree(path_ptr.cast()) };
-        }
-        return Err("无法解析系统 Program Files 目录。".into());
+fn github_release_update_readiness_error() -> Option<String> {
+    if !UPDATE_FEED_RESPONSE_BOUNDED_READY {
+        return Some("GitHub 更新清单大小限制尚未完成 release review。".into());
     }
-
-    let mut length = 0usize;
-    unsafe {
-        while *path_ptr.add(length) != 0 {
-            length += 1;
-        }
+    if !GITHUB_RELEASE_HOST_POLICY_REVIEWED {
+        return Some("GitHub HTTPS 主机与重定向策略尚未完成 release review。".into());
     }
-    let directory = unsafe {
-        PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(
-            path_ptr, length,
-        )))
-    };
-    unsafe { CoTaskMemFree(path_ptr.cast()) };
-    if !directory.is_absolute() {
-        return Err("系统 Program Files 路径不是绝对路径。".into());
+    if !UPDATE_PROXY_POLICY_READY {
+        return Some("Windows 系统代理行为尚未通过本机实测。".into());
     }
-    Ok(directory)
-}
-
-#[cfg(not(windows))]
-fn trusted_program_files_directory() -> Result<std::path::PathBuf, String> {
-    Err("Windows Program Files 目录仅适用于 Windows。".into())
-}
-
-// This is only a path/reparse-point check. It does not attest ACLs; runtime ACL/task attestation
-// remains a release blocker even though the setup script checks ACLs during provisioning.
-fn validate_protected_executable() -> Result<(), String> {
-    let program_files = trusted_program_files_directory()?;
-    let expected = program_files.join("AeroTune").join("AeroTune.exe");
-    let actual = std::env::current_exe().map_err(|_| "无法解析更新器自身路径。".to_string())?;
-    let install_dir = expected
-        .parent()
-        .ok_or_else(|| "Program Files/AeroTune 安装目录无效。".to_string())?;
-    for path in [program_files.as_path(), install_dir, actual.as_path()] {
-        let metadata =
-            std::fs::symlink_metadata(path).map_err(|_| "无法验证更新器安装路径。".to_string())?;
-        if metadata.file_type().is_symlink() {
-            return Err("更新器路径包含符号链接，已拒绝。".into());
-        }
+    if !UPDATE_BOUNDED_DOWNLOAD_READY {
+        return Some("更新包下载/解压上限尚未完成测量和 Windows 验证。".into());
     }
-    let expected = expected
-        .canonicalize()
-        .map_err(|_| "受保护 AeroTune 安装不存在。".to_string())?;
-    let actual = actual
-        .canonicalize()
-        .map_err(|_| "无法规范化更新器路径。".to_string())?;
-    if !actual
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&expected.to_string_lossy())
-    {
-        return Err("更新器拒绝从 Program Files/AeroTune 之外的副本运行。".into());
+    if !GITHUB_RELEASE_WINDOWS_ACCEPTED {
+        return Some(
+            "标准用户 UAC、取消、中断/并发安装和修复行为尚未通过本机 Windows 安装验收。".into(),
+        );
     }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn windows_system_directory() -> Option<std::path::PathBuf> {
-    use std::{ffi::OsString, os::windows::ffi::OsStringExt, path::PathBuf};
-    let mut buffer = vec![0u16; 32_768];
-    let length = unsafe {
-        windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(
-            buffer.as_mut_ptr(),
-            buffer.len() as u32,
-        )
-    } as usize;
-    if length == 0 || length >= buffer.len() {
-        return None;
-    }
-    Some(PathBuf::from(OsString::from_wide(&buffer[..length])))
-}
-
-// Execute only fixed read-only/Run task actions from the embedded verifier. The Run action
-// verifies and starts the same COM task object, avoiding a check-then-schtasks race.
-#[cfg(windows)]
-fn run_embedded_task_action(action: &'static str) -> bool {
-    use std::{os::windows::process::CommandExt, process::Command};
-
-    if !matches!(action, "Verify" | "Run") {
-        return false;
-    }
-    let Some(system_directory) = windows_system_directory() else {
-        return false;
-    };
-    let powershell = system_directory
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe");
-    let verifier = include_str!("../../scripts/signed-updater-task.ps1");
-    let command = format!(
-        "try {{ & {{\n{verifier}\n}} -Action {action} *> $null; exit 0 }} catch {{ exit 1 }}"
-    );
-    Command::new(powershell)
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
-        .arg(command)
-        .creation_flags(crate::util::CREATE_NO_WINDOW)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn task_is_registered() -> bool {
-    run_embedded_task_action("Verify")
-}
-
-#[cfg(not(windows))]
-fn task_is_registered() -> bool {
-    false
+    None
 }
 
 #[tauri::command]
 pub fn get_signed_update_readiness() -> UpdateReadiness {
-    match configured_update_inputs() {
-        Ok(_) => {
-            let task_registered = TASK_DEFINITION_ATTESTATION_READY && task_is_registered();
-            let reason = if !TASK_DEFINITION_ATTESTATION_READY {
-                Some("受保护任务的完整定义与 DACL 尚未通过运行时验证。".to_string())
-            } else if !task_registered {
-                Some("尚未配置受保护的管理员更新任务。".to_string())
-            } else {
-                None
-            };
-            UpdateReadiness {
-                enabled: task_registered,
-                task_registered,
-                reason,
-            }
-        }
-        // Do not inspect or invoke the task while the update pipeline is disabled/unconfigured.
+    match configured_github_release_inputs() {
+        Ok(_) => match github_release_update_readiness_error() {
+            Some(reason) => UpdateReadiness {
+                enabled: false,
+                reason: Some(reason),
+            },
+            None => UpdateReadiness {
+                enabled: true,
+                reason: None,
+            },
+        },
         Err(reason) => UpdateReadiness {
             enabled: false,
-            task_registered: false,
             reason: Some(reason),
         },
     }
@@ -455,8 +310,41 @@ fn ensure_newer_version(current: &str, candidate: &str) -> Result<semver::Versio
     Ok(candidate)
 }
 
-fn validate_artifact_url(url: &Url) -> Result<(), String> {
-    validate_https_dns_url(url, true)
+fn github_redirect_url_is_allowed(url: &Url) -> bool {
+    if validate_https_dns_url(url, true).is_err() {
+        return false;
+    }
+    match normalized_url_host(url).as_str() {
+        "github.com" => {
+            url.path() == GITHUB_RELEASE_LATEST_PATH
+                || url.path().starts_with(GITHUB_RELEASE_DOWNLOAD_PATH)
+        }
+        "release-assets.githubusercontent.com" | "objects.githubusercontent.com" => {
+            !url.path().is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn github_release_asset_url_is_allowed(url: &Url) -> bool {
+    let host = normalized_url_host(url);
+    let github_asset = host == "github.com" && url.path().starts_with(GITHUB_RELEASE_DOWNLOAD_PATH);
+    validate_https_dns_url(url, true).is_ok()
+        && github_asset
+        && url.path().ends_with(".nsis.zip")
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn validate_github_release_asset_url(url: &Url) -> Result<(), String> {
+    if github_release_asset_url_is_allowed(url) {
+        Ok(())
+    } else {
+        Err(
+            "更新工件必须是 AeroTune GitHub Releases 中的 HTTPS NSIS 更新包及其官方资产 URL。"
+                .into(),
+        )
+    }
 }
 
 const MAX_UPDATER_REDIRECT_HOPS: usize = 3;
@@ -466,29 +354,27 @@ const PROPOSED_MAX_UPDATE_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 const PROPOSED_MAX_UPDATE_EXPANDED_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_UPDATE_ARCHIVE_ENTRIES: usize = 1;
 
-fn updater_redirect_is_safe(previous_urls: &[Url], next_url: &Url) -> bool {
+fn github_updater_redirect_is_safe(previous_urls: &[Url], next_url: &Url) -> bool {
     !previous_urls.is_empty()
         && previous_urls.len() <= MAX_UPDATER_REDIRECT_HOPS
-        && previous_urls
-            .iter()
-            .all(|url| validate_artifact_url(url).is_ok())
-        && validate_artifact_url(next_url).is_ok()
+        && previous_urls.iter().all(github_redirect_url_is_allowed)
+        && github_redirect_url_is_allowed(next_url)
 }
 
-fn updater_redirect_policy() -> reqwest::redirect::Policy {
+fn github_updater_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
-        if updater_redirect_is_safe(attempt.previous(), attempt.url()) {
+        if github_updater_redirect_is_safe(attempt.previous(), attempt.url()) {
             attempt.follow()
         } else {
-            attempt.error("redirect blocked by AeroTune updater policy")
+            attempt.error("redirect blocked by AeroTune GitHub release policy")
         }
     })
 }
 
-fn configure_updater_client(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+fn configure_github_updater_client(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
         .timeout(UPDATER_REQUEST_TIMEOUT)
-        .redirect(updater_redirect_policy())
+        .redirect(github_updater_redirect_policy())
 }
 
 fn validate_system_proxy_policy(
@@ -508,25 +394,6 @@ fn validate_artifact_request_headers(headers: &reqwest::header::HeaderMap) -> Re
         return Err("更新工件请求不接受未审核的自定义 HTTP 头；已拒绝下载。".into());
     }
     Ok(())
-}
-
-fn build_bounded_update_request(
-    update: &tauri_plugin_updater::Update,
-) -> Result<reqwest::RequestBuilder, String> {
-    validate_system_proxy_policy(update.no_proxy, update.proxy.is_some())?;
-    validate_artifact_url(&update.download_url)?;
-    validate_artifact_request_headers(&update.headers)?;
-    let mut builder =
-        reqwest::Client::builder().user_agent(concat!("AeroTune/", env!("CARGO_PKG_VERSION")));
-    if let Some(timeout) = update.timeout {
-        builder = builder.timeout(timeout);
-    }
-    let client = configure_updater_client(builder)
-        .build()
-        .map_err(|_| "无法创建受限更新下载客户端。".to_string())?;
-    Ok(client
-        .get(update.download_url.clone())
-        .headers(update.headers.clone()))
 }
 
 async fn collect_bounded_update_response(
@@ -589,7 +456,10 @@ fn validate_pe_installer_header(header: &[u8]) -> Result<(), String> {
     } else {
         return Err("当前处理器架构不受更新器支持。".into());
     };
-    if machine != expected_machine {
+    // NSIS setup.exe is commonly a 32-bit PE bootstrapper even for x64/ARM64 bundles.
+    // The signed update archive and the target-specific *_x64/_arm64 filename are validated
+    // separately, so accept the x86 launcher while still rejecting other mismatched machines.
+    if machine != expected_machine && machine != 0x014c {
         return Err("更新安装程序 PE 架构与当前程序不一致；已拒绝处理。".into());
     }
     Ok(())
@@ -718,50 +588,22 @@ fn validate_update_archive_with_limits(
 pub(crate) struct VerifiedUpdateArtifact {
     bytes: Vec<u8>,
     target_version: semver::Version,
-    sha256: [u8; 32],
 }
 
 impl VerifiedUpdateArtifact {
     fn new(bytes: Vec<u8>, target_version: semver::Version) -> Self {
-        use sha2::{Digest, Sha256};
-
-        let sha256 = Sha256::digest(&bytes).into();
         Self {
             bytes,
             target_version,
-            sha256,
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub(crate) fn target_version(&self) -> &semver::Version {
-        &self.target_version
-    }
-
-    pub(crate) fn sha256_hex(&self) -> String {
-        let mut encoded = String::with_capacity(64);
-        for byte in self.sha256 {
-            encoded.push_str(&format!("{byte:02x}"));
-        }
-        encoded
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn verify_staged_bytes(&self, staged_bytes: &[u8]) -> Result<(), String> {
-        use sha2::{Digest, Sha256};
-
-        if staged_bytes.len() != self.bytes.len() {
-            return Err("受保护暂存内容长度与已验证更新工件不一致；已拒绝继续。".into());
-        }
-        let staged_digest: [u8; 32] = Sha256::digest(staged_bytes).into();
-        if staged_digest != self.sha256 {
-            return Err("受保护暂存内容摘要与已验证更新工件不一致；已拒绝继续。".into());
-        }
-        Ok(())
+    pub(crate) fn matches_target_version(&self, version: &str) -> bool {
+        self.target_version.to_string() == version
     }
 }
 
@@ -787,31 +629,39 @@ fn verify_and_wrap_update_artifact(
     Ok(VerifiedUpdateArtifact::new(bytes, target_version))
 }
 
-async fn download_and_verify_bounded_update(
+fn build_github_bounded_update_request(
+    update: &tauri_plugin_updater::Update,
+) -> Result<reqwest::RequestBuilder, String> {
+    validate_system_proxy_policy(update.no_proxy, update.proxy.is_some())?;
+    validate_github_release_asset_url(&update.download_url)?;
+    validate_artifact_request_headers(&update.headers)?;
+    let mut builder =
+        reqwest::Client::builder().user_agent(concat!("AeroTune/", env!("CARGO_PKG_VERSION")));
+    if let Some(timeout) = update.timeout {
+        builder = builder.timeout(timeout);
+    }
+    let client = configure_github_updater_client(builder)
+        .build()
+        .map_err(|_| "无法创建 GitHub Releases 更新下载客户端。".to_string())?;
+    Ok(client
+        .get(update.download_url.clone())
+        .headers(update.headers.clone()))
+}
+
+async fn download_and_verify_github_update(
     update: &tauri_plugin_updater::Update,
 ) -> Result<VerifiedUpdateArtifact, String> {
-    if !UPDATE_PIPELINE_READY {
-        return Err("更新处理流水线尚未通过验收；已拒绝下载。".into());
+    if let Some(reason) = github_release_update_readiness_error() {
+        return Err(reason);
     }
-    if !UPDATE_DNS_DESTINATION_POLICY_READY {
-        return Err("更新源 DNS 目的地址策略尚未通过审核；已拒绝下载。".into());
-    }
-    if !UPDATE_PROXY_POLICY_READY {
-        return Err("Windows 系统代理保留策略尚未通过 VM 验证；已拒绝下载。".into());
-    }
-    if !TASK_DEFINITION_ATTESTATION_READY {
-        return Err("固定更新任务及其安全属性尚未通过验收；已拒绝下载。".into());
-    }
-    if !UPDATE_BOUNDED_DOWNLOAD_READY {
-        return Err("有界更新下载尚未通过完整性与容量审核；已拒绝下载。".into());
-    }
+    validate_github_release_asset_url(&update.download_url)?;
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|_| "本机版本格式无效。".to_string())?;
     ensure_newer_version(&current.to_string(), &update.version)?;
-    let response = build_bounded_update_request(update)?
+    let response = build_github_bounded_update_request(update)?
         .send()
         .await
-        .map_err(|_| "更新工件下载失败；已拒绝更新。".to_string())?;
+        .map_err(|_| "GitHub Releases 更新工件下载失败；已拒绝更新。".to_string())?;
     let bytes =
         collect_bounded_update_response(response, PROPOSED_MAX_UPDATE_ARTIFACT_BYTES).await?;
     verify_and_wrap_update_artifact(
@@ -823,205 +673,77 @@ async fn download_and_verify_bounded_update(
 }
 
 fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    let (endpoint, public_key) = configured_update_inputs()?;
+    let (endpoint, public_key) = configured_github_release_inputs()?;
     app.updater_builder()
         .pubkey(public_key)
         .endpoints(vec![endpoint])
-        .map_err(|_| "安全更新源配置无效。".to_string())?
-        .configure_client(configure_updater_client)
+        .map_err(|_| "GitHub Releases 更新源配置无效。".to_string())?
+        .configure_client(configure_github_updater_client)
         .restart_after_install(false)
         .build()
-        .map_err(|_| "安全更新器初始化失败。".to_string())
+        .map_err(|_| "GitHub Releases 更新器初始化失败。".to_string())
 }
 
 #[tauri::command]
-pub async fn check_signed_update(_app: AppHandle) -> Result<Option<AvailableUpdate>, String> {
+pub async fn check_signed_update(app: AppHandle) -> Result<Option<AvailableUpdate>, String> {
     let readiness = get_signed_update_readiness();
     if !readiness.enabled {
         return Err(readiness
             .reason
-            .unwrap_or_else(|| "安全更新功能不可用。".into()));
+            .unwrap_or_else(|| "GitHub Releases 更新功能不可用。".into()));
     }
-    // The standard UI intentionally does not register Tauri's updater plugin. Once the
-    // external protected host is complete, update checks must be routed through that host.
-    Err("标准界面未加载更新插件；请由经过审计的受保护更新主机提供更新检查。".into())
+    let Some(update) = build_updater(&app)?
+        .check()
+        .await
+        .map_err(|_| "无法检查 GitHub Releases 更新。".to_string())?
+    else {
+        return Ok(None);
+    };
+    validate_github_release_asset_url(&update.download_url)?;
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|_| "本机版本格式无效。".to_string())?;
+    ensure_newer_version(&current.to_string(), &update.version)?;
+    Ok(Some(AvailableUpdate {
+        current_version: current.to_string(),
+        available_version: update.version,
+    }))
 }
 
 #[cfg(windows)]
 #[tauri::command]
-pub fn request_signed_update(app: AppHandle) -> Result<(), String> {
+pub async fn request_signed_update(app: AppHandle, expected_version: String) -> Result<(), String> {
     let readiness = get_signed_update_readiness();
     if !readiness.enabled {
         return Err(readiness
             .reason
-            .unwrap_or_else(|| "安全更新功能不可用。".into()));
+            .unwrap_or_else(|| "GitHub Releases 更新功能不可用。".into()));
     }
-    if !run_embedded_task_action("Run") {
-        return Err("受保护的更新任务定义/DACL 验证或启动失败。".into());
+    let Some(update) = build_updater(&app)?
+        .check()
+        .await
+        .map_err(|_| "无法重新验证 GitHub Releases 更新。".to_string())?
+    else {
+        return Err("GitHub Releases 中已没有待安装的新版本；请重新检查更新。".into());
+    };
+    if update.version != expected_version {
+        return Err("GitHub Releases 的版本已变化；请重新检查后再安装。".into());
     }
-    app.exit(0);
-    Ok(())
+    let artifact = download_and_verify_github_update(&update).await?;
+    if !artifact.matches_target_version(&update.version) {
+        return Err("已验证的更新工件与当前确认的版本不匹配；已拒绝安装。".into());
+    }
+    update
+        .install(artifact.bytes())
+        .map_err(|_| "已验证的更新未能启动 Windows 安装器。".to_string())
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
-pub fn request_signed_update(_app: AppHandle) -> Result<(), String> {
+pub async fn request_signed_update(
+    _app: AppHandle,
+    _expected_version: String,
+) -> Result<(), String> {
     Err("安全更新仅适用于 Windows。".into())
-}
-
-fn wait_for_other_aerotune_instances() -> Result<(), String> {
-    use std::time::{Duration, Instant};
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-
-    let current_exe = std::env::current_exe().map_err(|_| "无法识别更新器路径。".to_string())?;
-    let current_path = current_exe.to_string_lossy().to_ascii_lowercase();
-    let current_pid = std::process::id();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let mut system = System::new();
-    loop {
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
-        );
-        let mut another_instance = false;
-        let mut unknown_aerotune_process = false;
-        for process in system.processes().values() {
-            if process.pid().as_u32() == current_pid {
-                continue;
-            }
-            match process.exe() {
-                Some(path) if path.to_string_lossy().eq_ignore_ascii_case(&current_path) => {
-                    another_instance = true
-                }
-                None if process
-                    .name()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case("AeroTune.exe") =>
-                {
-                    unknown_aerotune_process = true
-                }
-                _ => {}
-            }
-        }
-        if unknown_aerotune_process {
-            return Err(
-                "无法确认另一个 AeroTune 进程的路径；为避免覆盖运行中的文件，更新已取消。".into(),
-            );
-        }
-        if !another_instance {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err("AeroTune 主窗口尚未退出；为避免覆盖运行中的文件，更新已取消。".into());
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-}
-
-async fn apply_signed_update(app: AppHandle) -> Result<(), String> {
-    if !crate::util::is_admin() {
-        return Err("更新任务未以管理员令牌运行；未请求或绕过 UAC。".into());
-    }
-    let updater = build_updater(&app)?;
-    if let Some(update) = updater
-        .check()
-        .await
-        .map_err(|_| "无法检查签名更新。".to_string())?
-    {
-        validate_artifact_url(&update.download_url)?;
-        let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-            .map_err(|_| "本机版本格式无效。".to_string())?;
-        ensure_newer_version(&current.to_string(), &update.version)?;
-        if !UPDATE_BOUNDED_DOWNLOAD_READY {
-            return Err("有界更新下载尚未通过完整性与容量审核；已拒绝下载。".into());
-        }
-        let _verified_artifact = download_and_verify_bounded_update(&update).await?;
-        // Do not invoke Tauri's Windows install path here: it stages the NSIS payload under
-        // the user temp directory before launching it. Protected staging, post-copy verification,
-        // installer-result validation, and rollback must be implemented before enabling installs.
-        return Err("受保护暂存、安装结果确认和回滚尚未完成；已拒绝安装更新。".into());
-    }
-    Ok(())
-}
-
-fn log_updater_error(message: impl std::fmt::Display) {
-    use std::io::Write;
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "AeroTune updater: {message}");
-}
-
-/// Restricted update-only mode intended for the fixed-action task; it never requests or bypasses UAC.
-pub fn run_update_only() -> i32 {
-    use std::sync::{
-        atomic::{AtomicI32, Ordering},
-        Arc,
-    };
-
-    if !crate::util::is_admin() {
-        log_updater_error("elevated task required; refusing to request UAC.");
-        return 1;
-    }
-    if let Err(reason) = validate_protected_executable() {
-        log_updater_error(reason);
-        return 1;
-    }
-    if let Err(reason) = configured_update_inputs() {
-        log_updater_error(format!("disabled: {reason}"));
-        return 1;
-    }
-    let _update_gate = match acquire_update_gate(UPDATE_GATE_WAIT_MS) {
-        Ok(gate) => gate,
-        Err(reason) => {
-            log_updater_error(reason);
-            return 1;
-        }
-    };
-    if let Err(reason) = crate::update_recovery::ensure_no_pending_journal(RECOVERY_STORE_REQUIRED)
-    {
-        log_updater_error(reason);
-        return 1;
-    }
-
-    let exit_code = Arc::new(AtomicI32::new(0));
-    let task_exit_code = exit_code.clone();
-    let app = match tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(move |app| {
-            let handle = app.handle().clone();
-            let exit_code = task_exit_code.clone();
-            tauri::async_runtime::spawn(async move {
-                let result =
-                    tauri::async_runtime::spawn_blocking(wait_for_other_aerotune_instances)
-                        .await
-                        .map_err(|_| "无法等待 AeroTune 退出。".to_string())
-                        .and_then(|result| result);
-                if let Err(reason) = result {
-                    log_updater_error(reason);
-                    exit_code.store(1, Ordering::SeqCst);
-                    handle.exit(1);
-                    return;
-                }
-                if let Err(reason) = apply_signed_update(handle.clone()).await {
-                    log_updater_error(reason);
-                    exit_code.store(1, Ordering::SeqCst);
-                    handle.exit(1);
-                } else {
-                    handle.exit(0);
-                }
-            });
-            Ok(())
-        })
-        .build(tauri::generate_context!("tauri.updater-helper.conf.json"))
-    {
-        Ok(app) => app,
-        Err(error) => {
-            log_updater_error(format!("failed to initialize: {error}"));
-            return 1;
-        }
-    };
-    app.run(|_, _| {});
-    exit_code.load(Ordering::SeqCst)
 }
 
 #[cfg(test)]
@@ -1054,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_artifact_binds_exact_bytes_target_version_and_digest() {
+    fn verified_artifact_binds_exact_bytes_and_target_version() {
         let artifact = verify_and_wrap_update_artifact(
             b"abc".to_vec(),
             "1.5.10",
@@ -1071,14 +793,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(artifact.bytes(), b"abc");
-        assert_eq!(artifact.target_version().to_string(), "1.5.10");
-        assert_eq!(
-            artifact.sha256_hex(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        assert!(artifact.verify_staged_bytes(b"abc").is_ok());
-        assert!(artifact.verify_staged_bytes(b"abd").is_err());
-        assert!(artifact.verify_staged_bytes(b"ab").is_err());
+        assert!(artifact.matches_target_version("1.5.10"));
+        assert!(!artifact.matches_target_version("1.5.11"));
     }
 
     #[test]
@@ -1099,60 +815,6 @@ mod tests {
     }
 
     #[test]
-    fn journal_factory_derives_update_and_rollback_hashes_from_verified_artifacts() {
-        let update_artifact = verify_and_wrap_update_artifact(
-            b"update payload".to_vec(),
-            "1.5.10",
-            |_| Ok(()),
-            |_, _| Ok(()),
-        )
-        .unwrap();
-        let rollback_artifact = verify_and_wrap_update_artifact(
-            b"rollback payload".to_vec(),
-            "1.5.9",
-            |_| Ok(()),
-            |_, _| Ok(()),
-        )
-        .unwrap();
-        let journal = crate::update_recovery::UpdateTransactionJournal::from_verified_artifacts(
-            "0123456789abcdef0123456789abcdef".into(),
-            "1.5.9".into(),
-            &update_artifact,
-            &rollback_artifact,
-        )
-        .unwrap();
-        let encoded: serde_json::Value =
-            serde_json::from_slice(&journal.encode().unwrap()).unwrap();
-
-        assert_eq!(
-            encoded["update_artifact_sha256"],
-            update_artifact.sha256_hex()
-        );
-        assert_eq!(
-            encoded["rollback_artifact_sha256"],
-            rollback_artifact.sha256_hex()
-        );
-        assert_eq!(encoded["target_version"], "1.5.10");
-
-        let mismatched_rollback = verify_and_wrap_update_artifact(
-            b"wrong rollback payload".to_vec(),
-            "1.5.8",
-            |_| Ok(()),
-            |_, _| Ok(()),
-        )
-        .unwrap();
-        assert!(
-            crate::update_recovery::UpdateTransactionJournal::from_verified_artifacts(
-                "fedcba9876543210fedcba9876543210".into(),
-                "1.5.9".into(),
-                &update_artifact,
-                &mismatched_rollback,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn failed_archive_check_never_produces_verified_artifact() {
         let result = verify_and_wrap_update_artifact(
             b"signed but invalid archive".to_vec(),
@@ -1161,14 +823,6 @@ mod tests {
             |_, _| Err("invalid archive".into()),
         );
         assert!(result.is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn trusted_program_files_root_resolves_to_existing_absolute_known_folder() {
-        let directory = trusted_program_files_directory().unwrap();
-        assert!(directory.is_absolute());
-        assert!(directory.is_dir());
     }
 
     #[test]
@@ -1292,79 +946,88 @@ mod tests {
     }
 
     #[test]
-    fn missing_feed_or_public_key_fails_closed_without_network_access() {
-        let no_feed = validate_runtime_update_inputs(
-            None,
-            Some(VALID_TEST_TAURI_PUBLIC_KEY),
-            true,
-            true,
-            true,
-            true,
-            true,
-            true,
-        )
-        .expect_err("missing feed URL must disable updater inputs");
-        assert!(no_feed.contains("安全更新源尚未配置"));
-
-        let no_public_key = validate_runtime_update_inputs(
-            Some("https://updates.aerotune.net/latest.json"),
-            None,
-            true,
-            true,
-            true,
-            true,
-            true,
-            true,
-        )
-        .expect_err("missing public key must disable updater inputs");
-        assert!(no_public_key.contains("Tauri 更新公钥尚未配置"));
-    }
-
-    #[test]
-    fn dns_destination_gate_blocks_configured_feed_until_policy_is_approved() {
-        let endpoint = Some("https://updates.aerotune.net/latest.json");
-        let public_key = Some(VALID_TEST_TAURI_PUBLIC_KEY);
-        let feed_error = validate_runtime_update_inputs(
-            endpoint, public_key, false, true, true, true, true, true,
-        )
-        .expect_err("unreviewed feed-size cap must keep updates disabled");
-        assert!(feed_error.contains("更新清单大小上限尚未通过 release review"));
-        let dns_error = validate_runtime_update_inputs(
-            endpoint, public_key, true, false, true, true, true, true,
-        )
-        .expect_err("an unreviewed DNS destination policy must keep updates disabled");
-        assert!(dns_error.contains("DNS 目的地址策略尚未通过审核"));
-        let proxy_error = validate_runtime_update_inputs(
-            endpoint, public_key, true, true, false, true, true, true,
-        )
-        .expect_err("unreviewed system-proxy routing must keep updates disabled");
-        assert!(proxy_error.contains("系统代理保留策略尚未通过 VM 验证"));
-        let download_error = validate_runtime_update_inputs(
-            endpoint, public_key, true, true, true, false, true, true,
-        )
-        .expect_err("unbounded artifact handling must keep updates disabled");
-        assert!(download_error.contains("有界签名下载和受保护暂存尚未完成"));
-        let task_error = validate_runtime_update_inputs(
-            endpoint, public_key, true, true, true, true, false, true,
-        )
-        .expect_err("unattested task configuration must keep updates disabled");
-        assert!(task_error.contains("固定更新任务定义和访问控制尚未通过运行时验收"));
-        assert!(validate_runtime_update_inputs(
-            endpoint, public_key, true, true, true, true, true, false,
-        )
-        .is_err());
-        assert!(validate_runtime_update_inputs(
-            endpoint, public_key, true, true, true, true, true, true,
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn readiness_stays_disabled_when_security_prerequisites_are_not_ready() {
+    fn readiness_stays_disabled_without_a_real_release_public_key() {
         let readiness = get_signed_update_readiness();
         assert!(!readiness.enabled);
-        assert!(!readiness.task_registered);
         assert!(readiness.reason.is_some());
+    }
+
+    #[test]
+    fn github_updater_release_gates_are_owner_accepted_for_early_access() {
+        assert!(github_release_update_readiness_error().is_none());
+        assert!(UPDATE_FEED_RESPONSE_BOUNDED_READY);
+        assert!(UPDATE_PROXY_POLICY_READY);
+        assert!(UPDATE_BOUNDED_DOWNLOAD_READY);
+        assert!(GITHUB_RELEASE_HOST_POLICY_REVIEWED);
+        assert!(GITHUB_RELEASE_WINDOWS_ACCEPTED);
+    }
+
+    #[test]
+    fn github_release_inputs_require_the_exact_public_feed_and_valid_public_key() {
+        assert!(validate_github_release_inputs(
+            Some(GITHUB_RELEASE_ENDPOINT),
+            Some(VALID_TEST_TAURI_PUBLIC_KEY),
+        )
+        .is_ok());
+        assert!(validate_github_release_inputs(None, Some(VALID_TEST_TAURI_PUBLIC_KEY)).is_ok());
+        assert!(validate_github_release_inputs(Some(GITHUB_RELEASE_ENDPOINT), None).is_err());
+        for endpoint in [
+            "https://github.com/attacker/AeroTune/releases/latest/download/latest.json",
+            "https://github.com/shengqiangdd/Other/releases/latest/download/latest.json",
+            "https://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json?token=x",
+            "http://github.com/shengqiangdd/AeroTune/releases/latest/download/latest.json",
+            "https://api.github.com/repos/shengqiangdd/AeroTune/releases/latest",
+        ] {
+            assert!(
+                validate_github_release_inputs(Some(endpoint), Some(VALID_TEST_TAURI_PUBLIC_KEY))
+                    .is_err(),
+                "non-canonical GitHub feed must be rejected: {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_release_artifacts_and_redirects_are_host_and_path_allowlisted() {
+        for url in [
+            "https://github.com/shengqiangdd/AeroTune/releases/download/v1.5.10/AeroTune_1.5.10_x64-setup.nsis.zip",
+        ] {
+            assert!(
+                validate_github_release_asset_url(&Url::parse(url).unwrap()).is_ok(),
+                "expected approved GitHub release URL: {url}"
+            );
+        }
+        for url in [
+            GITHUB_RELEASE_ENDPOINT,
+            "http://github.com/shengqiangdd/AeroTune/releases/download/v1.5.10/aerotune.nsis.zip",
+            "https://github.com/attacker/AeroTune/releases/download/v1.5.10/aerotune.nsis.zip",
+            "https://github.com/shengqiangdd/AeroTune/archive/refs/tags/v1.5.10.zip",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/abc/AeroTune.nsis.zip?token=x",
+            "https://evil.example/aerotune.nsis.zip",
+            "https://release-assets.githubusercontent.com.evil.example/file",
+            "https://user:pass@release-assets.githubusercontent.com/file",
+            "https://release-assets.githubusercontent.com:8443/file",
+        ] {
+            assert!(
+                validate_github_release_asset_url(&Url::parse(url).unwrap()).is_err(),
+                "unsafe GitHub release URL must be rejected: {url}"
+            );
+        }
+        let github = Url::parse(GITHUB_RELEASE_ENDPOINT).unwrap();
+        let asset_cdn =
+            Url::parse("https://release-assets.githubusercontent.com/asset?token=x").unwrap();
+        assert!(github_updater_redirect_is_safe(
+            std::slice::from_ref(&github),
+            &asset_cdn
+        ));
+        assert!(!github_updater_redirect_is_safe(
+            &vec![github.clone(); MAX_UPDATER_REDIRECT_HOPS + 1],
+            &asset_cdn,
+        ));
+        let attacker = Url::parse("https://evil.example/asset").unwrap();
+        assert!(!github_updater_redirect_is_safe(
+            std::slice::from_ref(&github),
+            &attacker
+        ));
     }
 
     #[test]
@@ -1384,110 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_downloads_require_public_https_without_credentials() {
-        assert!(validate_artifact_url(
-            &Url::parse("https://cdn.aerotune.net/aerotune.nsis.zip").unwrap()
-        )
-        .is_ok());
-        assert!(validate_artifact_url(
-            &Url::parse("https://cdn.aerotune.net/aerotune.nsis.zip?token=signed-value").unwrap()
-        )
-        .is_ok());
-        for artifact in [
-            "https://cdn.aerotune.net:8443/aerotune.nsis.zip",
-            "https://cdn.aerotune.net./aerotune.nsis.zip",
-            "https://cdn.aerotune.local/aerotune.nsis.zip",
-            "https://cdn.aerotune.internal/aerotune.nsis.zip",
-            "https://updates.example.net/aerotune.nsis.zip",
-            "https://cdn/aerotune.nsis.zip",
-            "https://cdn.aerotune.net/aerotune.nsis.zip#installer",
-        ] {
-            assert!(
-                validate_artifact_url(&Url::parse(artifact).unwrap()).is_err(),
-                "unsafe artifact URL must be rejected: {artifact}"
-            );
-        }
-        assert!(validate_artifact_url(
-            &Url::parse("http://cdn.aerotune.net/aerotune.nsis.zip").unwrap()
-        )
-        .is_err());
-        assert!(validate_artifact_url(
-            &Url::parse("https://user:pass@cdn.aerotune.net/aerotune.nsis.zip").unwrap()
-        )
-        .is_err());
-        assert!(
-            validate_artifact_url(&Url::parse("https://localhost/aerotune.nsis.zip").unwrap())
-                .is_err()
-        );
-        assert!(validate_artifact_url(
-            &Url::parse("https://localhost./aerotune.nsis.zip").unwrap()
-        )
-        .is_err());
-        assert!(validate_artifact_url(
-            &Url::parse("https://updates.localhost./aerotune.nsis.zip").unwrap()
-        )
-        .is_err());
-        assert!(
-            validate_artifact_url(&Url::parse("https://127.0.0.1/aerotune.nsis.zip").unwrap())
-                .is_err()
-        );
-        assert!(
-            validate_artifact_url(&Url::parse("https://[::1]/aerotune.nsis.zip").unwrap()).is_err()
-        );
-        for artifact in [
-            "https://2130706433/aerotune.nsis.zip",
-            "https://0x7f000001/aerotune.nsis.zip",
-            "https://0177.0.0.1/aerotune.nsis.zip",
-            "https://127.1/aerotune.nsis.zip",
-            "https://127.0.0.1./aerotune.nsis.zip",
-        ] {
-            let parsed = Url::parse(artifact).unwrap();
-            assert!(
-                validate_artifact_url(&parsed).is_err(),
-                "non-canonical IP artifact URL must be rejected: {artifact}"
-            );
-        }
-    }
-
-    #[test]
-    fn updater_redirects_are_bounded_and_remain_https_dns_urls() {
-        let origin = Url::parse("https://updates.aerotune.net/latest.json").unwrap();
-        let cdn = Url::parse("https://cdn.aerotune.net/aerotune.nsis.zip").unwrap();
-        assert!(updater_redirect_is_safe(
-            std::slice::from_ref(&origin),
-            &cdn
-        ));
-        assert!(updater_redirect_is_safe(
-            &vec![origin.clone(); MAX_UPDATER_REDIRECT_HOPS],
-            &cdn
-        ));
-        assert!(!updater_redirect_is_safe(&[], &cdn));
-        assert!(!updater_redirect_is_safe(
-            &vec![origin.clone(); MAX_UPDATER_REDIRECT_HOPS + 1],
-            &cdn
-        ));
-        let insecure_previous = Url::parse("http://updates.aerotune.net/latest.json").unwrap();
-        assert!(!updater_redirect_is_safe(&[insecure_previous], &cdn));
-        for target in [
-            "http://cdn.aerotune.net/aerotune.nsis.zip",
-            "https://user:pass@cdn.aerotune.net/aerotune.nsis.zip",
-            "https://127.0.0.1/aerotune.nsis.zip",
-            "https://2130706433/aerotune.nsis.zip",
-            "https://127.0.0.1./aerotune.nsis.zip",
-            "https://localhost/aerotune.nsis.zip",
-            "https://localhost./aerotune.nsis.zip",
-            "https://updates.localhost./aerotune.nsis.zip",
-        ] {
-            let target = Url::parse(target).unwrap();
-            assert!(
-                !updater_redirect_is_safe(std::slice::from_ref(&origin), &target),
-                "unsafe updater redirect must be rejected: {target}"
-            );
-        }
-    }
-
-    #[test]
-    fn updater_http_redirect_is_blocked_by_the_configured_client_policy() {
+    fn github_updater_http_redirect_is_blocked_by_the_configured_client_policy() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
@@ -1510,7 +1070,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let client = {
             let _runtime_guard = runtime.enter();
-            configure_updater_client(reqwest::Client::builder())
+            configure_github_updater_client(reqwest::Client::builder())
                 .no_proxy()
                 .build()
                 .unwrap()
@@ -1613,6 +1173,17 @@ mod tests {
         let installer = fake_pe_installer();
         let archive = make_test_update_zip(&[("AeroTune_1.5.9_x64-setup.exe", &installer)]);
         validate_update_archive_with_limits(&archive, "1.5.9", 1024, 1024, 1).unwrap();
+    }
+
+    #[test]
+    fn update_archive_allows_x86_nsis_bootstrap_for_x64_bundle() {
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let mut installer = fake_pe_installer();
+        installer[68..70].copy_from_slice(&0x014cu16.to_le_bytes());
+        let archive = make_test_update_zip(&[("AeroTune_1.5.9_x64-setup.exe", &installer)]);
+        validate_update_archive_with_limits(&archive, "1.5.9", 4096, 4096, 1).unwrap();
     }
 
     #[test]
@@ -1908,8 +1479,8 @@ mod tests {
         })
         .join()
         .unwrap();
-        assert!(first_waiter_error.contains("恢复状态未验证"));
-        assert!(second_waiter_error.contains("恢复状态未验证"));
+        assert!(first_waiter_error.contains("前一持有者异常退出"));
+        assert!(second_waiter_error.contains("前一持有者异常退出"));
         // Neither waiter released normally: the anchor sees the propagated abandonment too.
         assert_eq!(unsafe { WaitForSingleObject(anchor, 0) }, WAIT_ABANDONED);
         unsafe {
@@ -1917,10 +1488,5 @@ mod tests {
             windows_sys::Win32::Foundation::CloseHandle(abandoned_owner_handle as HANDLE);
             windows_sys::Win32::Foundation::CloseHandle(anchor);
         }
-    }
-
-    #[test]
-    fn update_only_argument_is_fixed() {
-        assert_eq!(UPDATE_ONLY_ARGUMENT, "--aerotune-update-only");
     }
 }

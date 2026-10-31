@@ -27,7 +27,7 @@ pub struct DnsSettings {
     pub ipv6: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "lowercase", tag = "t")]
 pub enum Revert {
     Registry {
@@ -70,7 +70,7 @@ pub(crate) enum EppWriteOutcome {
     Unchanged(String),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Change {
     pub id: u64,
     pub ts: u64,
@@ -1175,11 +1175,20 @@ pub fn list_changes() -> Result<Vec<Change>, String> {
     Ok(journal.changes.clone())
 }
 
+fn ensure_confirmed_snapshot(actual: &[Change], expected: &[Change]) -> Result<(), String> {
+    if actual != expected {
+        return Err("变更日志已变化，未执行操作；请刷新日志后重新确认".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn revert_change(id: u64) -> Result<(), String> {
+pub fn revert_change(expected: Change) -> Result<(), String> {
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
-    let idx = find_unique_change_index(&j.changes, id)?;
+    let idx = find_unique_change_index(&j.changes, expected.id)
+        .map_err(|_| "变更日志已变化，未执行操作；请刷新日志后重新确认".to_string())?;
+    ensure_confirmed_snapshot(&j.changes[idx..=idx], std::slice::from_ref(&expected))?;
     let removed = restore_at(&mut j.changes, idx, do_revert)?;
     if let Err(e) = j.save() {
         j.changes.insert(idx, removed);
@@ -1189,20 +1198,33 @@ pub fn revert_change(id: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn revert_change_group(group_id: u64) -> Result<usize, String> {
+pub fn revert_change_group(group_id: u64, expected: Vec<Change>) -> Result<usize, String> {
+    revert_change_group_inner(group_id, Some(&expected))
+}
+
+// Internal rollback is initiated by the operation itself, not by a UI confirmation.
+pub(crate) fn rollback_change_group(group_id: u64) -> Result<usize, String> {
+    revert_change_group_inner(group_id, None)
+}
+
+fn revert_change_group_inner(group_id: u64, expected: Option<&[Change]>) -> Result<usize, String> {
     if group_id == 0 || group_id > MAX_SAFE_JS_ID {
         return Err("恢复组 ID 超出前端安全范围".into());
     }
     let mut journal = JOURNAL.lock().unwrap();
     journal.ensure_storage_healthy()?;
-    let ids = journal
+    let targets = journal
         .changes
         .iter()
         .filter(|change| {
             change.group_id == Some(group_id) && !matches!(change.revert, Revert::None)
         })
-        .map(|change| change.id)
+        .cloned()
         .collect::<Vec<_>>();
+    if let Some(expected) = expected {
+        ensure_confirmed_snapshot(&targets, expected)?;
+    }
+    let ids = targets.iter().map(|change| change.id).collect::<Vec<_>>();
     if ids.is_empty() {
         return Err("该恢复组没有可还原的变更".into());
     }
@@ -1224,9 +1246,16 @@ pub fn revert_change_group(group_id: u64) -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn revert_all() -> Result<usize, String> {
+pub fn revert_all(expected: Vec<Change>) -> Result<usize, String> {
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
+    let targets = j
+        .changes
+        .iter()
+        .filter(|change| !matches!(change.revert, Revert::None))
+        .cloned()
+        .collect::<Vec<_>>();
+    ensure_confirmed_snapshot(&targets, &expected)?;
     let mut ok = 0;
     // 逆序还原；失败即停止，避免同一资源的更早快照覆盖失败的新快照。
     for idx in (0..j.changes.len()).rev() {
@@ -1245,9 +1274,10 @@ pub fn revert_all() -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn clear_journal() -> Result<(), String> {
+pub fn clear_journal(expected: Vec<Change>) -> Result<(), String> {
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
+    ensure_confirmed_snapshot(&j.changes, &expected)?;
     let previous = std::mem::take(&mut j.changes);
     if let Err(e) = j.save() {
         j.changes = previous;
@@ -1467,6 +1497,31 @@ mod tests {
                 applied_level: None,
             },
         }
+    }
+
+    #[test]
+    fn confirmed_snapshot_rejects_membership_order_and_content_changes() {
+        let original = vec![change(1), change(2)];
+        assert!(ensure_confirmed_snapshot(&original, &original).is_ok());
+        assert!(ensure_confirmed_snapshot(&original, &original[..1]).is_err());
+        assert!(
+            ensure_confirmed_snapshot(&original, &[original[1].clone(), original[0].clone()])
+                .is_err()
+        );
+        let mut altered = original.clone();
+        altered[0].revert = Revert::Tcp {
+            level: "changed".into(),
+            applied_level: None,
+        };
+        assert!(ensure_confirmed_snapshot(&original, &altered)
+            .unwrap_err()
+            .contains("刷新"));
+        altered = original.clone();
+        altered[0].desc = "different".into();
+        assert!(ensure_confirmed_snapshot(&original, &altered).is_err());
+        altered = original.clone();
+        altered[0].group_id = Some(7);
+        assert!(ensure_confirmed_snapshot(&original, &altered).is_err());
     }
 
     #[test]

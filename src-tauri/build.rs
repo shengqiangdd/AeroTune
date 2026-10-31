@@ -43,7 +43,7 @@ fn validate_windows_installer_overlay(config: &Value, source: &str) -> Result<()
                 if values.len() == 1 && values[0].as_str() == Some("nsis"));
             if !is_nsis_only {
                 return Err(format!(
-                    "{source} bundle.targets must remain exactly [\"nsis\"] for the protected updater installer."
+                    "{source} bundle.targets must remain exactly [\"nsis\"] for the AeroTune updater release installer."
                 ));
             }
         }
@@ -263,7 +263,7 @@ fn validate_app_identity(
     }
     if root.contains_key("mainBinaryName") {
         return Err(format!(
-            "{source} must not override mainBinaryName; the fixed AeroTune executable is required by the protected task."
+            "{source} must not override mainBinaryName; the fixed AeroTune executable is required by the signed NSIS bundle."
         ));
     }
     for (key, expected) in [
@@ -442,11 +442,11 @@ fn validate_updater_security(
             ));
         }
         let install_mode = windows.get("installMode").and_then(Value::as_str);
-        if (windows.contains_key("installMode") && install_mode != Some("quiet"))
-            || (require_explicit && install_mode != Some("quiet"))
+        if (windows.contains_key("installMode") && install_mode != Some("passive"))
+            || (require_explicit && install_mode != Some("passive"))
         {
             return Err(format!(
-                "{source} must keep plugins.updater.windows.installMode set to quiet."
+                "{source} must keep plugins.updater.windows.installMode set to passive so the per-machine installer can request UAC."
             ));
         }
     }
@@ -558,7 +558,7 @@ fn validate_build_security(manifest_dir: &Path) -> Result<(), String> {
     if !matches!(base.pointer("/bundle/targets").and_then(Value::as_array), Some(values)
         if values.len() == 1 && values[0].as_str() == Some("nsis"))
     {
-        return Err("base bundle.targets must explicitly be [\"nsis\"] for the protected updater installer.".into());
+        return Err("base bundle.targets must explicitly be [\"nsis\"] for the AeroTune updater release installer.".into());
     }
     validate_updater_security(&base, "base config", true)?;
     if base.pointer("/bundle/windows/allowDowngrades") != Some(&Value::Bool(false)) {
@@ -673,22 +673,38 @@ fn validate_build_security(manifest_dir: &Path) -> Result<(), String> {
         println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     }
 
-    for relative in ["src/lib.rs", "src/updater.rs", "src/update_recovery.rs"] {
+    for relative in ["src/lib.rs", "src/updater.rs"] {
         let path = manifest_dir.join(relative);
         println!("cargo:rerun-if-changed={}", path.display());
         ensure_regular_file(&path)?;
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        if relative == "src/lib.rs" && source.contains("tauri_plugin_updater") {
-            return Err("the ordinary UI app must not register the updater plugin.".into());
+        if relative == "src/lib.rs" {
+            if source
+                .matches("tauri_plugin_updater::Builder::new().build()")
+                .count()
+                != 1
+            {
+                return Err(
+                    "the ordinary app must register exactly one Tauri updater plugin for the Rust IPC façade."
+                        .into(),
+                );
+            }
+            if source.contains("update_recovery;") {
+                return Err(
+                    "the retired custom updater recovery module must not be compiled into the app."
+                        .into(),
+                );
+            }
         }
         if relative == "src/updater.rs" {
             for gate in [
-                "const UPDATE_PIPELINE_READY: bool = false;",
-                "const UPDATE_FEED_RESPONSE_BOUNDED_READY: bool = false;",
-                "const UPDATE_DNS_DESTINATION_POLICY_READY: bool = false;",
-                "const UPDATE_PROXY_POLICY_READY: bool = false;",
-                "const UPDATE_BOUNDED_DOWNLOAD_READY: bool = false;",
+                "const UPDATE_FEED_RESPONSE_BOUNDED_READY: bool =",
+                "const UPDATE_PROXY_POLICY_READY: bool =",
+                "const UPDATE_BOUNDED_DOWNLOAD_READY: bool =",
+                "const GITHUB_RELEASE_HOST_POLICY_REVIEWED: bool =",
+                "const GITHUB_RELEASE_WINDOWS_ACCEPTED: bool =",
+                "fn github_release_update_readiness_error() -> Option<String>",
                 "const PROPOSED_MAX_UPDATE_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;",
                 "const PROPOSED_MAX_UPDATE_EXPANDED_BYTES: u64 = 128 * 1024 * 1024;",
                 "const MAX_UPDATE_ARCHIVE_ENTRIES: usize = 1;",
@@ -698,16 +714,23 @@ fn validate_build_security(manifest_dir: &Path) -> Result<(), String> {
                 ".chunk()",
                 "checked_add(chunk.len())",
                 "fn verify_update_signature(",
-                "download_and_verify_bounded_update(",
+                "async fn download_and_verify_github_update(",
+                "fn build_github_bounded_update_request(",
+                "fn github_updater_redirect_is_safe(",
+                "fn github_redirect_url_is_allowed(",
+                "fn github_release_asset_url_is_allowed(",
+                "fn is_github_release_endpoint(",
+                "fn validate_github_release_inputs(",
+                "fn configured_github_release_inputs(",
+                "const GITHUB_RELEASE_ENDPOINT: &str",
                 "pub(crate) struct VerifiedUpdateArtifact",
                 "fn verify_and_wrap_update_artifact(",
-                "pub(crate) fn verify_staged_bytes(",
-                "if staged_bytes.len() != self.bytes.len()",
-                "let staged_digest: [u8; 32] = Sha256::digest(staged_bytes).into();",
-                "if staged_digest != self.sha256",
-                "verified_artifact_binds_exact_bytes_target_version_and_digest",
+                "fn matches_target_version(",
                 "Result<VerifiedUpdateArtifact, String>",
                 "|bytes, version| validate_update_archive_payload(bytes, version),",
+                "download_and_verify_github_update(&update).await?",
+                "artifact.matches_target_version(&update.version)",
+                "validate_github_release_asset_url(&update.download_url)?;",
                 ".verify(bytes)",
                 "fn validate_update_archive_payload(",
                 "fn validate_update_archive_with_limits(",
@@ -726,55 +749,46 @@ fn validate_build_security(manifest_dir: &Path) -> Result<(), String> {
                 "lower_name.ends_with(\"-setup.exe\")",
                 "actual_total_expanded > expanded_limit",
                 ".read(&mut scratch)",
-                "if !UPDATE_PIPELINE_READY",
-                "if !UPDATE_DNS_DESTINATION_POLICY_READY",
-                "if !UPDATE_PROXY_POLICY_READY",
                 "fn validate_system_proxy_policy(",
                 "validate_system_proxy_policy(update.no_proxy, update.proxy.is_some())?",
                 "selected_system_proxy_policy_rejects_direct_and_explicit_proxy_overrides",
-                "if !TASK_DEFINITION_ATTESTATION_READY",
+                "if !UPDATE_FEED_RESPONSE_BOUNDED_READY",
+                "if !GITHUB_RELEASE_HOST_POLICY_REVIEWED",
+                "if !UPDATE_PROXY_POLICY_READY",
                 "if !UPDATE_BOUNDED_DOWNLOAD_READY",
-                "validate_artifact_url(&update.download_url)?;",
-                "ensure_newer_version(&current.to_string(), &update.version)?;",
-                "fn validate_runtime_update_inputs(",
+                "if !GITHUB_RELEASE_WINDOWS_ACCEPTED",
                 "fn valid_tauri_public_key(",
                 "if !valid_tauri_public_key(public_key)",
                 "tauri_public_key_must_decode_to_a_valid_minisign_key",
-                "if !feed_response_bounded_ready",
-                "if !dns_destination_policy_ready",
-                "if !proxy_policy_ready",
-                "if !bounded_download_ready",
-                "if !task_definition_attestation_ready",
-                "if !UPDATE_BOUNDED_DOWNLOAD_READY",
-                "UPDATE_FEED_RESPONSE_BOUNDED_READY,",
-                "UPDATE_DNS_DESTINATION_POLICY_READY,",
-                "UPDATE_PROXY_POLICY_READY,",
-                "UPDATE_BOUNDED_DOWNLOAD_READY,",
-                "TASK_DEFINITION_ATTESTATION_READY,",
-                "UPDATE_PIPELINE_READY,",
-                "const TASK_DEFINITION_ATTESTATION_READY: bool = false;",
-                "pub(crate) const RECOVERY_STORE_REQUIRED: bool =",
-                "UPDATE_PIPELINE_READY || TASK_DEFINITION_ATTESTATION_READY",
             ] {
                 if !source.contains(gate) {
-                    return Err(format!("hard-off runtime gate is missing: {gate}"));
+                    return Err(format!("GitHub updater contract is missing: {gate}"));
                 }
+            }
+            if source.contains("run_update_only")
+                || source.contains("UPDATE_ONLY_ARGUMENT")
+                || source.contains("tauri_plugin_updater::Builder::new()")
+                || source.contains("crate::update_recovery")
+                || source.contains("download_and_verify_bounded_update")
+                || source.contains("AeroTune-SignedUpdater")
+            {
+                return Err("retired scheduled-task/recovery updater code must not remain in the standard updater module.".into());
             }
             if source.contains("pub bytes: Vec<u8>")
                 || source.contains("pub target_version: semver::Version")
-                || source.contains("pub sha256: [u8; 32]")
             {
                 return Err("verified update artifact internals must remain private.".into());
             }
-            let bounded_request_builder = source
-                .split_once("fn build_bounded_update_request(")
+            let request_builder = source
+                .split_once("fn build_github_bounded_update_request(")
                 .and_then(|(_, remainder)| remainder.split_once("\n}\n").map(|(body, _)| body))
-                .ok_or_else(|| "bounded request builder could not be verified.".to_string())?;
-            if bounded_request_builder.contains(".no_proxy()")
-                || bounded_request_builder.contains(".proxy(")
-            {
+                .ok_or_else(|| {
+                    "GitHub artifact request builder could not be verified".to_string()
+                })?;
+            if request_builder.contains(".no_proxy()") || request_builder.contains(".proxy(") {
                 return Err(
-                    "the bounded request builder must preserve automatic Windows system-proxy routing.".into(),
+                    "bounded request builder must preserve automatic Windows system-proxy routing."
+                        .into(),
                 );
             }
             let compact_source: String = source
@@ -784,54 +798,10 @@ fn validate_build_security(manifest_dir: &Path) -> Result<(), String> {
             if compact_source.contains("download_and_install(")
                 || compact_source.contains(".download(")
                 || compact_source.contains("::download(")
-                || compact_source.contains(".install(")
-                || compact_source.contains("::install(")
+                || compact_source.matches(".install(").count() != 1
+                || !compact_source.contains("update.install(artifact.bytes())")
             {
-                return Err("Tauri's unbounded built-in download/install path is forbidden; use bounded verification and only the audited protected staging runner.".into());
-            }
-            if source
-                .matches(
-                    "crate::update_recovery::ensure_no_pending_journal(RECOVERY_STORE_REQUIRED)",
-                )
-                .count()
-                != 2
-            {
-                return Err(
-                    "the normal app and update-only helper must both check the protected recovery gate."
-                        .into(),
-                );
-            }
-        }
-        if relative == "src/update_recovery.rs" {
-            if !source.contains("target.cmp_precedence(&from) != std::cmp::Ordering::Greater")
-                || !source.contains("journal_rejects_build_metadata_only_version_progression")
-                || source.contains("if target <= from")
-                || !source.contains("from_verified_artifacts(")
-                || !source.contains("&crate::updater::VerifiedUpdateArtifact")
-                || !source.contains("update_artifact.sha256_hex()")
-                || !source.contains("rollback_artifact.sha256_hex()")
-                || source.contains("pub struct UpdateTransactionJournal")
-                || source.contains("pub schema_version:")
-                || source.contains("pub transaction_id:")
-                || source.contains("pub from_version:")
-                || source.contains("pub target_version:")
-                || source.contains("pub update_artifact_sha256")
-                || source.contains("pub rollback_artifact_sha256")
-                || source.contains("pub phase:")
-            {
-                return Err("recovery journal must enforce strict SemVer precedence and bind hashes to verified artifacts.".into());
-            }
-            let readiness_guard = "if !crate::updater::RECOVERY_STORE_REQUIRED {";
-            if source.matches(readiness_guard).count() != 2 {
-                return Err("both journal writer entry points must remain readiness-gated.".into());
-            }
-            if source.contains("pub(crate) fn create_prepared_journal")
-                || source.contains("pub(crate) fn advance_journal")
-            {
-                return Err(
-                    "journal writer entry points must remain private until recovery is audited."
-                        .into(),
-                );
+                return Err("updates must use the bounded GitHub download and signature/archive verification before the single standard Tauri install(bytes) call.".into());
             }
         }
     }

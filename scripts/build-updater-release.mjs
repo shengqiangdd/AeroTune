@@ -32,7 +32,7 @@ function resolveFromRoot(scriptPath) {
 
 try {
   run("elevated task contract", ["scripts/check-elevated-test-task-contract.mjs"], testEnvironment);
-  run("signed updater task contract", ["scripts/check-signed-updater-task-contract.mjs"], testEnvironment);
+  run("GitHub updater contract", ["scripts/check-github-updater-contract.mjs"], testEnvironment);
   run("updater release contracts", ["scripts/check-updater-release-contract.mjs"], testEnvironment);
   run("dynamic Cargo guard matrix", ["scripts/check-updater-build-guard.mjs"], testEnvironment);
 

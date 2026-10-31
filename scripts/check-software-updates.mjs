@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const backend = read("src-tauri/src/software_updates.rs");
+const resolver = read("src-tauri/src/util.rs");
+const ipc = read("src-tauri/src/lib.rs");
+const api = read("src/lib/api.ts");
+const settings = read("src/pages/Settings.tsx");
+const privacy = read("docs/DATA_PRIVACY_INVENTORY.md");
+
+const args = backend.match(/run_output_checked_with_timeout\([\s\S]*?\n\s*&\[(.*?)\],\n\s*QUERY_TIMEOUT/s)?.[1];
+assert.ok(args, "query argument list must remain explicit");
+assert.match(args, /^"list", "--upgrade-available", "--disable-interactivity"$/);
+assert.doesNotMatch(args, /--accept-source-agreements|"upgrade"|"install"|--all/);
+assert.match(backend, /QUERY_TIMEOUT: Duration = Duration::from_secs\(90\)/);
+assert.match(backend, /MAX_DISPLAY_BYTES: usize = 512 \* 1024/);
+assert.match(backend, /MAX_ERROR_BYTES: usize = 8 \* 1024/);
+assert.match(backend, /bound_error_message\(error\)/);
+assert.match(backend, /不能确认查询是否完整/);
+assert.match(backend, /不能据此判断是否有更新/);
+assert.match(resolver, /Microsoft\.DesktopAppInstaller/);
+assert.match(resolver, /WindowsApps/);
+assert.match(resolver, /拒绝启动 WinGet/);
+assert.match(resolver, /"winget" \| "winget\.exe" => return resolve_winget_executable\(\)/);
+assert.match(ipc, /software_updates::check_winget_updates/);
+assert.match(api, /check_winget_updates/);
+assert.match(settings, /window\.confirm\([\s\S]*可能联网、更新源缓存/);
+assert.match(settings, /原始输出未经结构化解析/);
+assert.match(privacy, /WinGet/);
+console.log("PASS WinGet query is opt-in, fixed-argument, non-installing, bounded, and explicitly non-persistent");

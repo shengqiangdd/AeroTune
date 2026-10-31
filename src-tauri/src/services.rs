@@ -893,7 +893,7 @@ pub fn set_service_startup(name: String, mode: String) -> Result<(), String> {
                 &format!("服务「{name}」取消延迟启动"),
             ),
         },
-        || crate::journal::revert_change_group(group_id),
+        || crate::journal::rollback_change_group(group_id),
     );
     drop(group);
     result?;

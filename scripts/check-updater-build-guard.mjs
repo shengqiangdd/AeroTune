@@ -168,7 +168,8 @@ const cases = [
 ];
 
 const testDirectory = mkdtempSync(join(tmpdir(), "aerotune-updater-build-guard-"));
-const cargoArgs = ["check", "--manifest-path", "src-tauri/Cargo.toml", "--locked"];
+const tauriDirectory = resolve(process.cwd(), "src-tauri");
+const cargoArgs = ["check", "--manifest-path", "Cargo.toml", "--locked"];
 
 function runCargoCheck(environment, outputPath) {
   const cargoEnvironment = updaterReleaseTestEnvironment(environment);
@@ -179,7 +180,7 @@ function runCargoCheck(environment, outputPath) {
   let result;
   try {
     result = spawnSync("cargo", cargoArgs, {
-      cwd: process.cwd(),
+      cwd: tauriDirectory,
       env: cargoEnvironment,
       stdio: ["ignore", outputFd, outputFd],
     });

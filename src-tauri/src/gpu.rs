@@ -229,7 +229,8 @@ pub fn poll() -> Option<GpuPdh> {
     }
 }
 
-/// 各显示适配器显存总量之和（注册表 HardwareInformation）
+/// 各显示适配器显存总量之和，仅用于诊断测试；不可拼接到单卡样本。
+#[cfg(test)]
 pub fn total_vram_bytes() -> Option<u64> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     let class = winreg::RegKey::predef(HKEY_LOCAL_MACHINE)

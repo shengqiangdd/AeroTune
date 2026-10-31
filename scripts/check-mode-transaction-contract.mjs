@@ -11,7 +11,7 @@ const groupRunner = tweaks.slice(tweaks.indexOf("fn run_mode_group<"), tweaks.in
 const eppWriter = journal.slice(journal.indexOf("fn write_ahead_epp_change_with_journal("), journal.indexOf("pub(crate) fn set_epp_with_journal("));
 
 assert.match(groupRunner, /match apply\(\)[\s\S]*Err\(apply_error\)[\s\S]*rollback\(\)[\s\S]*已自动回滚[\s\S]*自动回滚未能完全确认[\s\S]*恢复记录已保留/);
-assert.match(applyCore, /validate_mode_access\(mode, crate::util::is_admin\(\)\)\?[\s\S]*begin_change_group[\s\S]*run_mode_group\([\s\S]*apply_mode_steps\(mode, &mut applied\)[\s\S]*drop\(group_guard\.take\(\)\)[\s\S]*revert_change_group\(group_id\)[\s\S]*persist_mode_with_recovery\([\s\S]*write_mode\(mode\)[\s\S]*MANUAL_HOLD\.lock\(\)\.unwrap\(\) = Some\(Instant::now\(\)\)/);
+assert.match(applyCore, /validate_mode_access\(mode, crate::util::is_admin\(\)\)\?[\s\S]*begin_change_group[\s\S]*run_mode_group\([\s\S]*apply_mode_steps\(mode, &mut applied\)[\s\S]*drop\(group_guard\.take\(\)\)[\s\S]*rollback_change_group\(group_id\)[\s\S]*persist_mode_with_recovery\([\s\S]*write_mode\(mode\)[\s\S]*MANUAL_HOLD\.lock\(\)\.unwrap\(\) = Some\(Instant::now\(\)\)/);
 assert.match(tweaks, /fn write_mode_with\([\s\S]*persist\(mode\.as_bytes\(\)\)[\s\S]*模式状态保存失败/);
 assert.match(tweaks, /pub\(crate\) fn write_mode\(mode: &str\) -> Result<\(\), String>[\s\S]*atomic_write\(&mode_path\(\), bytes\)/);
 assert.match(tweaks, /fn persist_mode_with_recovery\([\s\S]*Err\(persist_error\)[\s\S]*rollback\(group_id\)[\s\S]*恢复记录已保留/);

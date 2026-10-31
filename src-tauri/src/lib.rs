@@ -19,11 +19,11 @@ mod residency;
 mod rootcause;
 mod scene_shadow;
 mod services;
+mod software_updates;
 mod startup;
 mod stats;
 mod tasks;
 mod tweaks;
-pub mod update_recovery;
 mod updater;
 mod util;
 
@@ -32,7 +32,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Emitter, Manager};
 
-pub const UPDATE_ONLY_ARGUMENT: &str = updater::UPDATE_ONLY_ARGUMENT;
 pub use updater::UpdateGateGuard;
 
 pub fn try_acquire_app_update_gate() -> Result<UpdateGateGuard, String> {
@@ -179,16 +178,13 @@ fn init_logging() {
     );
 }
 
-pub fn run_update_only() -> i32 {
-    updater::run_update_only()
-}
-
 pub fn run() {
     init_logging();
     let cache = Arc::new(stats::Cache::new());
     let diag = Arc::new(Mutex::new(diag::Engine::new()));
     let auto = Arc::new(Mutex::new(auto::AutoState::new()));
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(cache.clone())
@@ -321,6 +317,7 @@ pub fn run() {
             journal::clear_journal,
             updater::get_signed_update_readiness,
             updater::check_signed_update,
+            software_updates::check_winget_updates,
             updater::request_signed_update,
         ])
         .setup(move |app| {

@@ -2,7 +2,22 @@
 
 以下为从 README 迁移的详细开发与版本记录；保留原有日期、措辞和验证范围。带日期的开发记录本身不代表对应版本已经正式发布。原 README 未覆盖当前清单中的每个版本，因此没有补造缺失版本记录。
 
-## 未发布 — 仓库与文档整理
+## v1.5.10 — 标准 Tauri + GitHub Releases 更新路径（early access）
+
+- 将更新设计收敛为 Tauri 官方 Minisign 更新包与 GitHub Releases `latest.json`；保留 HTTPS/固定仓库地址、签名版本绑定、限制大小的下载与 ZIP/PE 校验，并由用户单独确认安装。
+- 将 Windows 更新模式设为 `passive` 配合 per-machine NSIS；安装器需要通过 UAC 请求权限。明确 Minisign 不等于 Authenticode，且标准 Tauri 路径不包含 AeroTune 自定义事务日志或崩溃回滚。
+- 增加独立 Release 工作流，构建与 `contents:write` 发布拆成不同作业；签名 key 使用受保护 GitHub Environment。用户授权 early-access 发布，剩余 GitHub redirect/proxy、取消、并发和修复验证范围记录于 `docs/UPDATER_RELEASE_BLOCKERS.md`。
+- 完成实际 AeroTune Settings→Rust IPC→有界下载→Tauri 签名/版本/ZIP 检查→UAC/NSIS→手动重启的 loopback 验收，并修复 x64 NSIS PE32 引导程序兼容性；生产 GitHub 更新由 v1.5.11 验收。
+
+## v1.5.10 — 诊断与恢复安全
+
+- 变更日志的单条、批量恢复及清空操作在锁内核对完整确认快照；日志发生变化时拒绝执行并提示刷新。应用内部事务补偿仍使用独立的回滚路径。
+- 跨实验一致性分析由前后端共同校验供电来源及计数完整性，仅纳入前后窗口供电来源稳定且一致的记录；旧记录和不满足条件的记录仍保留在历史中，结果不代表因果关系。
+- GPU 数据不再混合单张 NVIDIA 卡与全适配器聚合指标；采集失败时清除陈旧测量，异常温度、利用率及显存数据保持未知。
+- 设置页新增用户确认后执行的 WinGet 只读更新查询；仅使用受保护 App Installer 包中的可执行文件、固定参数、超时与输出上限，不接受源协议、不安装软件，也不持久化查询清单。表格仍为本地化原始文本，不汇总更新数。
+- 修正异常关联时间线的相对起点刻度和绘图范围，并为屏幕阅读器补充事件的相对时间。
+
+## v1.5.10 — 仓库与文档整理
 
 - 选择 MIT 许可证，新增 `LICENSE`，并同步 npm / Cargo 元数据与 README。
 - 加入 `.gitattributes` 固定文本文件为 LF，修复 Windows CI 检查对 CRLF 的敏感性。

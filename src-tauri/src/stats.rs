@@ -2114,27 +2114,124 @@ fn merge_gpu(
     name: Option<String>,
     pdh: Option<crate::gpu::GpuPdh>,
 ) -> Option<GpuInfo> {
-    let previous = previous.map(|mut info| {
-        info.utilization = None;
-        info.mem_used_mb = None;
-        info.temperature = None;
-        info
-    });
-    let mut info = nvidia.or(previous).or_else(|| {
-        name.map(|name| GpuInfo {
+    // NVIDIA reports one device; PDH spans adapters and has no matching device identity.
+    // Never attach aggregate load/memory (or registry capacity) to a named NVIDIA GPU.
+    if let Some(info) = nvidia {
+        return Some(info);
+    }
+    if let Some(sample) = pdh {
+        return Some(GpuInfo {
+            name: "GPU（全适配器聚合）".into(),
+            utilization: sample
+                .util_percent
+                .is_finite()
+                .then_some(sample.util_percent)
+                .filter(|value| (0.0..=100.0).contains(value)),
+            mem_used_mb: sample.dedicated_bytes.map(|bytes| bytes / 1024 / 1024),
+            // The busiest 3D engine and summed dedicated usage are not one device.
+            mem_total_mb: None,
+            temperature: None,
+        });
+    }
+    // Only retain a display name after failure; no stale sensor/capacity evidence.
+    name.or_else(|| previous.map(|info| info.name))
+        .map(|name| GpuInfo {
             name,
             ..Default::default()
         })
-    })?;
-    // Missing samples are unknown, never reuse yesterday's utilization as live data.
-    if let Some(sample) = pdh {
-        info.utilization = Some(sample.util_percent);
-        info.mem_used_mb = sample
-            .dedicated_bytes
-            .map(|bytes| bytes / 1024 / 1024)
-            .or(info.mem_used_mb);
+}
+
+#[cfg(test)]
+mod gpu_sample_tests {
+    use super::*;
+
+    fn nvidia() -> GpuInfo {
+        parse_nvidia_sample("NVIDIA GPU, 12, 1024, 8192, 55").unwrap()
     }
-    Some(info)
+
+    fn aggregate() -> crate::gpu::GpuPdh {
+        crate::gpu::GpuPdh {
+            util_percent: 89.0,
+            dedicated_bytes: Some(4096 * 1024 * 1024),
+        }
+    }
+
+    #[test]
+    fn nvidia_device_is_never_overlaid_with_all_adapter_data() {
+        let result = merge_gpu(None, Some(nvidia()), None, Some(aggregate())).unwrap();
+        assert_eq!(result.name, "NVIDIA GPU");
+        assert_eq!(result.utilization, Some(12.0));
+        assert_eq!(result.mem_used_mb, Some(1024));
+        assert_eq!(result.mem_total_mb, Some(8192));
+        assert_eq!(result.temperature, Some(55.0));
+    }
+
+    #[test]
+    fn aggregate_fallback_does_not_inherit_device_identity_or_capacity() {
+        let result = merge_gpu(
+            Some(nvidia()),
+            None,
+            Some("Intel GPU".into()),
+            Some(aggregate()),
+        )
+        .unwrap();
+        assert_eq!(result.name, "GPU（全适配器聚合）");
+        assert_eq!(result.utilization, Some(89.0));
+        assert_eq!(result.mem_used_mb, Some(4096));
+        assert_eq!(result.mem_total_mb, None);
+        assert_eq!(result.temperature, None);
+        let failed = merge_gpu(Some(result), None, None, None).unwrap();
+        assert_eq!(failed.utilization, None);
+        assert_eq!(failed.mem_used_mb, None);
+        assert_eq!(failed.mem_total_mb, None);
+        assert_eq!(failed.temperature, None);
+        let recovered = merge_gpu(Some(failed), Some(nvidia()), None, Some(aggregate())).unwrap();
+        assert_eq!(recovered.name, "NVIDIA GPU");
+        assert_eq!(recovered.temperature, Some(55.0));
+    }
+
+    #[test]
+    fn failed_device_sample_and_name_only_probe_have_no_measurements() {
+        let failed = merge_gpu(Some(nvidia()), None, None, None).unwrap();
+        assert_eq!(failed.name, "NVIDIA GPU");
+        assert_eq!(failed.mem_total_mb, None);
+        assert_eq!(failed.temperature, None);
+        assert_eq!(failed.utilization, None);
+        assert_eq!(failed.mem_used_mb, None);
+        assert!(merge_gpu(None, None, None, None).is_none());
+        let name_only = merge_gpu(None, None, Some("Intel GPU".into()), None).unwrap();
+        assert_eq!(name_only.name, "Intel GPU");
+        assert_eq!(name_only.utilization, None);
+    }
+
+    #[test]
+    fn unsupported_nvidia_fields_remain_unknown_without_aggregate_backfill() {
+        let device = parse_nvidia_sample("GPU, N/A, [Not Supported], 8192, N/A").unwrap();
+        let result = merge_gpu(None, Some(device), None, Some(aggregate())).unwrap();
+        assert_eq!(result.utilization, None);
+        assert_eq!(result.mem_used_mb, None);
+        assert_eq!(result.temperature, None);
+        assert_eq!(result.mem_total_mb, Some(8192));
+    }
+
+    #[test]
+    fn nvidia_parser_rejects_invalid_values_and_keeps_rows_separate() {
+        for text in ["GPU, NaN, 9000, 8192, inf", "GPU, 101, 9000, 8192, -1"] {
+            let result = parse_nvidia_sample(text).unwrap();
+            assert_eq!(result.utilization, None);
+            assert_eq!(result.mem_used_mb, None);
+            assert_eq!(result.temperature, None);
+        }
+        let result = parse_nvidia_sample("GPU, 0, 0, 0, 0\nOther GPU, 100, 5, 10, 90").unwrap();
+        assert_eq!(result.name, "GPU");
+        assert_eq!(result.utilization, Some(0.0));
+        assert_eq!(result.mem_used_mb, Some(0));
+        assert_eq!(result.mem_total_mb, None);
+        assert_eq!(result.temperature, Some(0.0));
+        for invalid in ["", "GPU, 1, 2", ", 0, 0, 1, 2", "GPU, 1, 2, 3, 4, 5"] {
+            assert!(parse_nvidia_sample(invalid).is_none());
+        }
+    }
 }
 
 fn read_battery() -> Result<Option<BatteryInfo>, u32> {
@@ -2162,18 +2259,31 @@ fn query_nvidia() -> Option<GpuInfo> {
         ],
         Duration::from_secs(5),
     )?;
-    let line = out.lines().next()?;
-    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-    if parts.len() < 5 {
+    parse_nvidia_sample(&out)
+}
+
+fn parse_nvidia_sample(output: &str) -> Option<GpuInfo> {
+    let line = output.lines().find(|line| !line.trim().is_empty())?;
+    let parts: Vec<&str> = line.split(',').map(str::trim).collect();
+    if parts.len() != 5 || parts[0].is_empty() {
         return None;
     }
-    let parse = |s: &str| s.parse::<f64>().ok().map(|v| v as f32).or(None);
+    let parse = |text: &str, max: f32| {
+        text.parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && (0.0..=max).contains(value))
+    };
+    let mem_total_mb = parts[3].parse::<u64>().ok().filter(|total| *total > 0);
+    let mem_used_mb = parts[2]
+        .parse::<u64>()
+        .ok()
+        .filter(|used| mem_total_mb.is_none_or(|total| *used <= total));
     Some(GpuInfo {
         name: parts[0].to_string(),
-        utilization: parse(parts[1]),
-        mem_used_mb: parts[2].parse::<u64>().ok(),
-        mem_total_mb: parts[3].parse::<u64>().ok(),
-        temperature: parse(parts[4]),
+        utilization: parse(parts[1], 100.0),
+        mem_used_mb,
+        mem_total_mb,
+        temperature: parse(parts[4], 150.0),
     })
 }
 
@@ -2221,7 +2331,7 @@ pub fn start(
             loop {
                 let started = std::time::Instant::now();
                 let pdh_gpu = crate::gpu::poll();
-                // NVIDIA samples supply temperature and act as utilization fallback.
+                // Prefer one coherent NVIDIA-device sample; PDH is aggregate-only fallback.
                 // WMI name discovery is static: retry only once per minute when absent.
                 let nv = query_nvidia();
                 let name = if cached.is_none() && nv.is_none() && started >= next_name_probe {
@@ -2231,11 +2341,6 @@ pub fn start(
                     None
                 };
                 cached = merge_gpu(cached.take(), nv, name, pdh_gpu);
-                if let Some(g) = cached.as_mut() {
-                    if g.mem_total_mb.is_none() {
-                        g.mem_total_mb = crate::gpu::total_vram_bytes().map(|v| v / 1024 / 1024);
-                    }
-                }
                 *gpu_worker_cache.write().unwrap() = cached.clone();
                 // Account for query cost instead of adding it to the desired period.
                 std::thread::sleep(Duration::from_secs(3).saturating_sub(started.elapsed()));
