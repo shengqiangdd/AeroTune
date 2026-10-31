@@ -37,9 +37,20 @@ for (const path of [archivePath, signaturePath, installerPath]) {
     throw new Error("The signed updater archive exceeds the reviewed 64 MiB transport cap.");
   }
 }
-const signatureText = readFileSync(signaturePath, "utf8");
-if (!signatureText.startsWith("untrusted comment:") || !signatureText.includes("trusted comment:")) {
-  throw new Error("The updater .sig file does not look like a Tauri Minisign signature.");
+const signatureText = readFileSync(signaturePath, "utf8").trim();
+if (!signatureText) throw new Error("The updater .sig file is empty.");
+const decodedSignature = Buffer.from(signatureText, "base64");
+if (decodedSignature.toString("base64") !== signatureText) {
+  throw new Error("The updater .sig file is not canonical base64.");
+}
+let decodedSignatureText;
+try {
+  decodedSignatureText = new TextDecoder("utf-8", { fatal: true }).decode(decodedSignature);
+} catch {
+  throw new Error("The decoded updater .sig file is not valid UTF-8.");
+}
+if (!decodedSignatureText.startsWith("untrusted comment:") || !decodedSignatureText.includes("trusted comment:")) {
+  throw new Error("The updater .sig file does not decode to a Tauri Minisign signature.");
 }
 const artifactUrl = `https://github.com/shengqiangdd/AeroTune/releases/download/${tag}/${encodeURIComponent(archiveName)}`;
 const manifest = {
@@ -48,7 +59,7 @@ const manifest = {
   pub_date: new Date().toISOString(),
   platforms: {
     "windows-x86_64-nsis": {
-      signature: Buffer.from(signatureText, "utf8").toString("base64"),
+      signature: signatureText,
       url: artifactUrl,
     },
   },

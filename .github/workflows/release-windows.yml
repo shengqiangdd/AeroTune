@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+    outputs:
+      release_commit: ${{ steps.resolve_release_ref.outputs.release_commit }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}\src-tauri\target
       AEROTUNE_RELEASE_TAG: ${{ inputs.release_tag }}
@@ -42,6 +44,7 @@ jobs:
           package-manager-cache: false
 
       - name: Resolve release tag commit and clean checkout state
+        id: resolve_release_ref
         shell: pwsh
         run: |
           $tagRef = "refs/tags/$($env:AEROTUNE_RELEASE_TAG)^{commit}"
@@ -55,6 +58,7 @@ jobs:
           "AEROTUNE_RELEASE_TAG_COMMIT=$tagCommit" >> $env:GITHUB_ENV
           "AEROTUNE_CHECKED_OUT_COMMIT=$headCommit" >> $env:GITHUB_ENV
           "AEROTUNE_RELEASE_WORKTREE_CLEAN=$clean" >> $env:GITHUB_ENV
+          "release_commit=$headCommit" >> $env:GITHUB_OUTPUT
 
       - name: Validate tag and synchronized release versions
         run: node scripts/validate-github-release-tag.mjs
@@ -92,9 +96,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Record updater archive size and signature-presence evidence
+      - name: Record updater bounds and verify cryptographic signature
         run: node scripts/measure-updater-artifact-bounds.mjs
         env:
+          AEROTUNE_UPDATE_PUBLIC_KEY: ${{ vars.AEROTUNE_UPDATE_PUBLIC_KEY }}
           AEROTUNE_REVIEWED_COMPRESSED_CAP_BYTES: 67108864
           AEROTUNE_REVIEWED_EXPANDED_CAP_BYTES: 134217728
 
@@ -123,6 +128,23 @@ jobs:
     env:
       AEROTUNE_RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
+      - name: Revalidate release tag against the built commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compare publication tag target with the validated build commit
+        shell: pwsh
+        env:
+          AEROTUNE_EXPECTED_RELEASE_COMMIT: ${{ needs.build.outputs.release_commit }}
+        run: |
+          $publishedCommit = (git rev-parse "HEAD^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot resolve the publication tag commit." }
+          if ([string]::IsNullOrWhiteSpace($env:AEROTUNE_EXPECTED_RELEASE_COMMIT) -or $publishedCommit -ne $env:AEROTUNE_EXPECTED_RELEASE_COMMIT) {
+            throw "Release tag changed after build validation; refusing to attach assets to a different commit."
+          }
+
       - name: Download the immutable build artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

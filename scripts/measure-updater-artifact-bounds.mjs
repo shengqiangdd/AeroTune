@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -37,8 +38,24 @@ if (metadata.size > compressedCap) fail(`compressed artifact size ${metadata.siz
 const signaturePath = `${artifactPath}.sig`;
 const signatureStat = lstatSync(signaturePath);
 if (signatureStat.isSymbolicLink() || !signatureStat.isFile() || signatureStat.size === 0) fail("signed updater .sig file must be a non-empty regular file");
-const signature = readFileSync(signaturePath, "utf8");
-if (!signature.startsWith("untrusted comment:") || !signature.includes("trusted comment:")) fail("updater .sig does not look like a Tauri Minisign signature");
+const encodedSignature = readFileSync(signaturePath, "utf8").trim();
+if (!encodedSignature) fail("updater .sig is empty");
+const decodedSignature = Buffer.from(encodedSignature, "base64");
+if (decodedSignature.toString("base64") !== encodedSignature) fail("updater .sig is not canonical base64");
+let signatureText;
+try {
+  signatureText = new TextDecoder("utf-8", { fatal: true }).decode(decodedSignature);
+} catch {
+  fail("decoded updater .sig is not valid UTF-8");
+}
+if (!signatureText.startsWith("untrusted comment:") || !signatureText.includes("trusted comment:")) fail("updater .sig does not decode to a Tauri Minisign signature");
+const publicKey = process.env.AEROTUNE_UPDATE_PUBLIC_KEY?.trim();
+if (!publicKey) fail("AEROTUNE_UPDATE_PUBLIC_KEY is required to verify the signed release artifact");
+const verification = spawnSync("cargo", [
+  "run", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--example", "verify-updater-signature", "--release", "--", artifactPath, version,
+], { stdio: "inherit", env: process.env });
+if (verification.error) fail(`cannot launch Minisign verification (${verification.error.message})`);
+if (verification.status !== 0) fail("updater archive signature or signed app version does not match the configured public key and release version");
 
 const bytes = readFileSync(artifactPath);
 const minEocd = Math.max(0, bytes.length - (22 + 0xffff));
@@ -94,6 +111,7 @@ console.log(JSON.stringify({
   compressedCapBytes: compressedCap,
   expandedCapBytes: expandedCap,
   signaturePresent: true,
-  signatureVerified: false,
-  note: "This records ZIP sizes and signature presence only; cryptographic verification and local Windows acceptance are separate gates.",
+  signatureVerified: true,
+  signedVersion: version,
+  note: "Minisign and signed-version verification passed against the configured public key; artifact-size review and local Windows acceptance remain separate gates.",
 }, null, 2));
