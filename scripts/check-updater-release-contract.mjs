@@ -251,6 +251,7 @@ assert.match(releaseWorkflow.slice(validateTagStepAt, validateTagStepEnd < 0 ? u
 assert.match(ciWorkflow, /contents: read/);
 assert.doesNotMatch(ciWorkflow, /contents: write/);
 assert.match(overlayScript, /isValidTauriPublicKey/);
+assert.match(overlayScript, /overlay\.bundle\.createUpdaterArtifacts = "v1Compatible"/);
 assert.match(manifestScript, /windows-x86_64-nsis/);
 assert.match(manifestScript, /expectedArchiveName = `AeroTune_\$\{version\}_x64-setup\.nsis\.zip`/);
 assert.match(manifestScript, /decodedSignature\.toString\("base64"\) !== signatureText/);
