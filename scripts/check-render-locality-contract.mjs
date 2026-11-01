@@ -151,7 +151,10 @@ const checks = [
       && /memoryLoadBand=\{processMemoryLoadBand\}/.test(app)
       && /measureSearchLatency\s*\?\s*interactionLatencyBandFromP95\(searchLatencyP95Ms, searchLatencySampleCount, current\)\s*:\s*"unknown"/.test(processes)
       && /LATENCY_MIN_SAMPLES = 20/.test(processPolicy)
-      && /P95 偏高时自动延长进程列表刷新间隔/.test(processes)
+      && /只有搜索\/排序 P95 在至少 20 个样本后偏高时才会延长自动刷新间隔/.test(processes)
+      && /请求和渲染指标仅显示、不改变策略/.test(processes)
+      && /requestStartedAt = measureSearchLatencyEnabled\.current \? performance\.now\(\) : null[\s\S]*?await api\.listProcesses\(\)[\s\S]*?processRequestLatencySamples\.current/.test(processes)
+      && /useLayoutEffect\(\(\) => \{[\s\S]*?pendingProcessRenderStartedAt\.current[\s\S]*?requestAnimationFrame[\s\S]*?processRenderLatencySamples\.current[\s\S]*?\}, \[list\]\)/.test(processes)
       && /cpuLoadBandFromUsage\(stats\?\.cpu, current\.cpu\)/.test(app)
       && /memoryLoadBandFromUsage\(stats\?\.mem_used_gb, stats\?\.mem_total_gb, current\.memory\)/.test(app)
       && /return cpu === current\.cpu && memory === current\.memory \? current : \{ cpu, memory \}/.test(app)
@@ -169,7 +172,7 @@ const checks = [
       && /LATENCY_HIGH_EXIT_MS = 80/.test(processPolicy)
       && /交互 P95 偏高时自动放缓/.test(processes)
       && /Math\.max\(cpuIntervalMs, memoryIntervalMs, interactionLatencyIntervalMs\)/.test(processPolicy),
-    description: "process scans pause when hidden and use CPU/RAM/UI-latency hysteresis without telemetry rerenders",
+    description: "hidden-page scans pause; only CPU/RAM/search latency affects refresh policy, with bounded observational request/render metrics",
   },
   {
     ok: /const filtered\s*=\s*useMemo\(/.test(processes)

@@ -28,6 +28,20 @@ function formatAvailableMemory(value: number | null): string {
   return value == null || !Number.isFinite(value) ? "未测量" : `${value.toFixed(0)} MB`;
 }
 
+function recordLatencyMetricSample(
+  samples: number[],
+  totalSampleCount: { current: number },
+  valueMs: number,
+): { rollingSampleCount: number; p95Ms: number | null } | null {
+  const sampleUpdate = recordInteractionLatencySample(samples, valueMs, totalSampleCount.current);
+  if (!sampleUpdate) return null;
+  totalSampleCount.current = sampleUpdate.totalSampleCount;
+  return {
+    rollingSampleCount: sampleUpdate.rollingSampleCount,
+    p95Ms: sampleUpdate.shouldUpdateP95 ? nearestRankPercentile(samples, 0.95) : null,
+  };
+}
+
 /** 画像角色中值得在进程表里一眼识别的子集；系统组件与普通用户应用不加徽章避免噪音。 */
 const NOTABLE_ROLE_META: Record<string, { label: string; tone: "rose" | "violet" | "amber" }> = {
   "updater-suspect": { label: "更新器嫌疑", tone: "rose" },
@@ -71,12 +85,23 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [selectedMemoryPids, setSelectedMemoryPids] = useState<number[]>([]);
   const [measureSearchLatency, setMeasureSearchLatency] = useState(false);
+  const measureSearchLatencyEnabled = useRef(false);
   const [searchLatencyP95Ms, setSearchLatencyP95Ms] = useState<number | null>(null);
   const [searchLatencySampleCount, setSearchLatencySampleCount] = useState(0);
+  const [requestLatencyP95Ms, setRequestLatencyP95Ms] = useState<number | null>(null);
+  const [requestLatencySampleCount, setRequestLatencySampleCount] = useState(0);
+  const [renderLatencyP95Ms, setRenderLatencyP95Ms] = useState<number | null>(null);
+  const [renderLatencySampleCount, setRenderLatencySampleCount] = useState(0);
   const [interactionLatencyBand, setInteractionLatencyBand] = useState<InteractionLatencyBand>("unknown");
   const inputInteractionStartedAt = useRef<number | null>(null);
   const inputLatencySamples = useRef<number[]>([]);
   const inputLatencySampleCount = useRef(0);
+  const processRequestLatencySamples = useRef<number[]>([]);
+  const processRequestLatencyTotalCount = useRef(0);
+  const processRenderLatencySamples = useRef<number[]>([]);
+  const processRenderLatencyTotalCount = useRef(0);
+  const pendingProcessRenderStartedAt = useRef<number | null>(null);
+  const pendingProcessRenderFrame = useRef<number | null>(null);
   const processTableScrollRef = useRef<HTMLDivElement | null>(null);
   const firstVirtualRowRef = useRef<HTMLTableRowElement | null>(null);
   const [tableScrollTop, setTableScrollTop] = useState(0);
@@ -112,11 +137,27 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
       return;
     }
     pending.current = true;
+    const requestStartedAt = measureSearchLatencyEnabled.current ? performance.now() : null;
     if (mounted.current) setLoading(true);
     try {
       const processes = await api.listProcesses();
+      if (requestStartedAt != null && measureSearchLatencyEnabled.current && mounted.current && !document.hidden) {
+        const sampleUpdate = recordLatencyMetricSample(
+          processRequestLatencySamples.current,
+          processRequestLatencyTotalCount,
+          Math.max(0, performance.now() - requestStartedAt),
+        );
+        if (sampleUpdate?.p95Ms != null) {
+          setRequestLatencySampleCount(sampleUpdate.rollingSampleCount);
+          setRequestLatencyP95Ms(sampleUpdate.p95Ms);
+        }
+      }
       if (mounted.current) {
         const recovered = snapshotStaleRef.current;
+        pendingProcessRenderStartedAt.current =
+          requestStartedAt != null && measureSearchLatencyEnabled.current && !document.hidden
+            ? performance.now()
+            : null;
         setList(processes);
         setSnapshotStatus((current) => nextProcessSnapshotStatus(current, true));
         if (recovered) toastOk("进程列表已刷新，进程操作已重新启用。");
@@ -127,6 +168,17 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
         requestInitialInsights.current?.();
       }
     } catch (e) {
+      if (requestStartedAt != null && measureSearchLatencyEnabled.current && mounted.current && !document.hidden) {
+        const sampleUpdate = recordLatencyMetricSample(
+          processRequestLatencySamples.current,
+          processRequestLatencyTotalCount,
+          Math.max(0, performance.now() - requestStartedAt),
+        );
+        if (sampleUpdate?.p95Ms != null) {
+          setRequestLatencySampleCount(sampleUpdate.rollingSampleCount);
+          setRequestLatencyP95Ms(sampleUpdate.p95Ms);
+        }
+      }
       if (mounted.current) {
         setSnapshotStatus((current) => nextProcessSnapshotStatus(current, false));
         if (!snapshotStaleRef.current) toastErr(e);
@@ -160,10 +212,25 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
 
   useEffect(() => {
     mounted.current = true;
+    const discardHiddenRenderSample = () => {
+      if (!document.hidden || !measureSearchLatencyEnabled.current) return;
+      pendingProcessRenderStartedAt.current = null;
+      if (pendingProcessRenderFrame.current != null) {
+        cancelAnimationFrame(pendingProcessRenderFrame.current);
+        pendingProcessRenderFrame.current = null;
+      }
+    };
+    document.addEventListener("visibilitychange", discardHiddenRenderSample);
     load();
     return () => {
+      document.removeEventListener("visibilitychange", discardHiddenRenderSample);
       mounted.current = false;
       if (timer.current) clearInterval(timer.current);
+      pendingProcessRenderStartedAt.current = null;
+      if (pendingProcessRenderFrame.current != null) {
+        cancelAnimationFrame(pendingProcessRenderFrame.current);
+        pendingProcessRenderFrame.current = null;
+      }
     };
   }, [load]);
 
@@ -388,6 +455,33 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
     }
   }, [firstVirtualRowPid, processRowHeight, virtualStart, virtualRows.length]);
 
+  useLayoutEffect(() => {
+    const startedAt = pendingProcessRenderStartedAt.current;
+    pendingProcessRenderStartedAt.current = null;
+    if (startedAt == null || !measureSearchLatencyEnabled.current) return;
+
+    const frame = requestAnimationFrame(() => {
+      if (pendingProcessRenderFrame.current !== frame) return;
+      pendingProcessRenderFrame.current = null;
+      if (!measureSearchLatencyEnabled.current || document.hidden) return;
+      const sampleUpdate = recordLatencyMetricSample(
+        processRenderLatencySamples.current,
+        processRenderLatencyTotalCount,
+        Math.max(0, performance.now() - startedAt),
+      );
+      if (sampleUpdate?.p95Ms == null) return;
+      setRenderLatencySampleCount(sampleUpdate.rollingSampleCount);
+      setRenderLatencyP95Ms(sampleUpdate.p95Ms);
+    });
+    pendingProcessRenderFrame.current = frame;
+    return () => {
+      if (pendingProcessRenderFrame.current === frame) {
+        cancelAnimationFrame(frame);
+        pendingProcessRenderFrame.current = null;
+      }
+    };
+  }, [list]);
+
   // Optional user-driven response sampling: input event to the next frame after rows commit.
   useEffect(() => {
     const startedAt = inputInteractionStartedAt.current;
@@ -588,22 +682,37 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
         <Chip tone={measureSearchLatency ? "green" : "slate"}>
           <button
             aria-pressed={measureSearchLatency}
-            aria-label={measureSearchLatency ? "关闭搜索与排序响应测量" : "开启搜索与排序响应测量"}
+            aria-label={measureSearchLatency ? "关闭进程响应测量" : "开启进程响应测量"}
             aria-describedby="process-response-measurement-status"
-            title="启用后记录搜索或排序到下一帧的 P95（最多保留 31 个样本）；至少有 20 个样本后，P95 偏高时自动延长进程列表刷新间隔。"
+            title="启用后在本机测量搜索/排序到下一帧；手动刷新或开启自动刷新后采集列表请求往返和列表更新到下一动画帧的 P95（各保留最多 31 个样本）。只有搜索/排序 P95 在至少 20 个样本后偏高时才会延长自动刷新间隔；请求和渲染指标仅显示、不改变策略。"
             onClick={() => {
+              const nextEnabled = !measureSearchLatency;
+              measureSearchLatencyEnabled.current = nextEnabled;
               inputInteractionStartedAt.current = null;
               inputLatencySamples.current = [];
               inputLatencySampleCount.current = 0;
+              processRequestLatencySamples.current = [];
+              processRequestLatencyTotalCount.current = 0;
+              processRenderLatencySamples.current = [];
+              processRenderLatencyTotalCount.current = 0;
+              pendingProcessRenderStartedAt.current = null;
+              if (pendingProcessRenderFrame.current != null) {
+                cancelAnimationFrame(pendingProcessRenderFrame.current);
+                pendingProcessRenderFrame.current = null;
+              }
               setSearchLatencyP95Ms(null);
-               setSearchLatencySampleCount(0);
-              setMeasureSearchLatency((enabled) => !enabled);
+              setSearchLatencySampleCount(0);
+              setRequestLatencyP95Ms(null);
+              setRequestLatencySampleCount(0);
+              setRenderLatencyP95Ms(null);
+              setRenderLatencySampleCount(0);
+              setMeasureSearchLatency(nextEnabled);
             }}
           >
             <span id="process-response-measurement-status">
               {measureSearchLatency
-                ? <>响应 P95 {searchLatencyP95Ms == null ? "—" : `${searchLatencyP95Ms.toFixed(1)} ms`} · {inputLatencySamples.current.length < 20 ? `${inputLatencySamples.current.length}/20 样本` : `${inputLatencySamples.current.length} 样本 · 已就绪`}</>
-                : "测搜索/排序"}
+                ? <>搜索/排序 {searchLatencyP95Ms == null ? "—" : `${searchLatencyP95Ms.toFixed(1)}ms`} · 请求 {requestLatencyP95Ms == null ? "—" : `${requestLatencyP95Ms.toFixed(1)}ms`} · 更新帧 {renderLatencyP95Ms == null ? "—" : `${renderLatencyP95Ms.toFixed(1)}ms`} · 样本(搜/请/帧) {Math.min(inputLatencySamples.current.length, 20)}/{Math.min(requestLatencySampleCount, 20)}/{Math.min(renderLatencySampleCount, 20)}</>
+                : "测响应 P95"}
             </span>
           </button>
         </Chip>
