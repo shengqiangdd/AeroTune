@@ -35,6 +35,7 @@
 
 借鉴产品思路不意味着复用其代码；实际复用前须审核各项目许可证、依赖和权限模型。
 
+- [PowerToys Run](https://learn.microsoft.com/en-us/windows/powertoys/run)：可搜索、键盘驱动的目标跳转；AeroTune 借鉴此模式为 Ctrl+K 添加仅导航的 Settings 深链，不复用其代码，也不执行系统命令。
 - [System Informer](https://github.com/winsiderss/systeminformer)：进程和资源观察。
 - [WinUtil](https://github.com/ChrisTitusTech/winutil)：软件维护与设置组织。
 - [Libre Hardware Monitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)：传感器支持范围。

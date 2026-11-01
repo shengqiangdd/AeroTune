@@ -4,6 +4,7 @@ import {
   MAX_RECENT_PAGES,
   NAVIGATION_SEARCH_TERMS,
   RECENT_NAVIGATION_KEY,
+  SETTINGS_DEEP_LINKS,
   clearRecentPageIds,
   getTabFocusTarget,
   nextRecentPageIds,
@@ -39,7 +40,15 @@ assert.equal(rankNavigationItems(pages, "CPU/内存")[0]?.id, "processes");
 assert.equal(rankNavigationItems(pages, "CPU，内存")[0]?.id, "processes");
 assert.equal(rankNavigationItems(pages, "设置", ["network"])[0]?.id, "settings");
 assert.equal(rankNavigationItems(pages, "这不是功能").length, 0);
-console.log("PASS intent aliases, token matching, and relevance ranking");
+assert.equal(rankNavigationItems(pages, "检查更新", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-security-updates");
+assert.equal(rankNavigationItems(pages, "更新", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-security-updates");
+assert.equal(rankNavigationItems(pages, "撤销", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-change-journal");
+assert.equal(rankNavigationItems(pages, "系统保护", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-restore-point");
+assert.equal(rankNavigationItems(pages, "隐私", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-local-data");
+assert.equal(rankNavigationItems(pages, "WinGet", [], SETTINGS_DEEP_LINKS)[0]?.anchor, "settings-winget-updates");
+assert.equal(rankNavigationItems(pages, "", [], SETTINGS_DEEP_LINKS).some((item) => "anchor" in item), false);
+assert.ok(SETTINGS_DEEP_LINKS.every((item) => item.routeId === "settings" && item.anchor.startsWith("settings-") && !("action" in item) && !("command" in item)));
+console.log("PASS aliases, relevance ranking, and allowlisted navigation-only Settings deep links");
 
 const recentResults = rankNavigationItems(pages, "", ["network", "startup", "network", "unknown"]);
 assert.deepEqual(recentResults.slice(0, 2).map(({ id }) => id), ["network", "startup"]);
@@ -98,11 +107,19 @@ assert.equal(getTabFocusTarget([firstControl, lastControl], firstControl, false,
 console.log("PASS Enter respects the focused control and Tab always re-enters/traps the modal");
 
 const app = readFileSync("src/App.tsx", "utf8");
-assert.match(app, /rankNavigationItems\(NAV, quickQuery, recentPageIds\)/);
-assert.match(app, /navigate\(quickSelected\.id,\s*undefined,\s*true\)/);
-assert.match(app, /onClick=\{\(\) => navigate\(item\.id,\s*undefined,\s*true\)\}/);
+const settings = readFileSync("src/pages/Settings.tsx", "utf8");
+const ui = readFileSync("src/components/ui.tsx", "utf8");
+assert.match(app, /rankNavigationItems\(NAV, quickQuery, recentPageIds, SETTINGS_DEEP_LINKS\)/);
+assert.match(app, /selectQuickResult\(quickSelected\)/);
+assert.match(app, /onClick=\{\(\) => selectQuickResult\(item\)\}/);
+assert.match(app, /setRequestedSettingsSection\(item\.anchor\);[\s\S]*navigate\(item\.routeId,\s*undefined,\s*true,\s*false\)/);
+assert.match(app, /if \(target !== "settings"\) setRequestedSettingsSection\(null\)/);
 assert.match(app, /const routeChanged = target !== page;[\s\S]*if \(routeChanged\) \{\s*pendingRouteFocusRef\.current = true/);
-assert.match(app, /if \(!routeChanged && fromQuick\) requestAnimationFrame\(\(\) => returnFocus\?\.focus\(\)\)/);
+assert.match(app, /if \(!routeChanged && fromQuick && restoreQuickFocus\) requestAnimationFrame\(\(\) => returnFocus\?\.focus\(\)\)/);
+assert.match(settings, /target\.scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
+assert.match(settings, /target\.focus\(\{ preventScroll: true \}\)/);
+assert.match(ui, /tabIndex=\{focusableTarget \? -1 : undefined\} role=\{focusableTarget \? "region" : undefined\} aria-label=\{focusableTarget \? title : undefined\}/);
+for (const link of SETTINGS_DEEP_LINKS) assert.match(settings, new RegExp(`id="${link.anchor}"[\\s\\S]{0,120}focusableTarget`), `missing focusable Settings destination ${link.anchor}`);
 assert.match(app, /mainRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
 assert.match(app, /tabIndex=\{-1\}[\s\S]*aria-label=\{`当前页面：/);
 assert.match(app, /role="status" aria-live="polite" aria-atomic="true"/);
@@ -114,5 +131,6 @@ assert.match(app, /const persisted = clearRecentPageIds\(\)[\s\S]*if \(persisted
 assert.match(app, /onClick=\{clearRecentPages\}/);
 assert.match(app, /quickKeyboardScrollRef\.current = true;[\s\S]*setQuickActiveIndex/);
 assert.match(app, /selectedBounds\.top < listBounds\.top[\s\S]*selectedBounds\.bottom > listBounds\.bottom/);
-assert.match(app, /ref=\{quickListRef\} id="quick-page-results"/);
-console.log("PASS command palette focus, keyboard guards, announcements, and clear-history feedback are wired");
+assert.match(app, /ref=\{quickListRef\} id="quick-navigation-results"/);
+assert.match(app, /aria-activedescendant=\{quickSelected \? `quick-result-\$\{quickSelected\.id\}`/);
+console.log("PASS quick navigation focus, deep-link scrolling, keyboard guards, and announcements are wired");

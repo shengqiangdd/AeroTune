@@ -7,15 +7,19 @@ export function Card({
   right,
   children,
   className = "",
+  id,
+  focusableTarget = false,
 }: {
   title?: string;
   icon?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
   className?: string;
+  id?: string;
+  focusableTarget?: boolean;
 }) {
   return (
-    <div className={`glass p-5 ${className}`}>
+    <div id={id} tabIndex={focusableTarget ? -1 : undefined} role={focusableTarget ? "region" : undefined} aria-label={focusableTarget ? title : undefined} className={`glass p-5 ${focusableTarget ? "focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60" : ""} ${className}`}>
       {(title || right) && (
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">

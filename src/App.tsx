@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { TitleBar } from "./components/TitleBar";
-import { Search } from "lucide-react";
+import { CornerDownRight, Search } from "lucide-react";
 import { Sidebar, PageId, NAV } from "./components/Sidebar";
 import { Toaster, toastErr, toastOk } from "./lib/toast";
 import { useStats } from "./hooks/useStats";
@@ -17,6 +17,7 @@ import {
   persistRecentPageIds,
   rankNavigationItems,
   readRecentPageIds,
+  SETTINGS_DEEP_LINKS,
   shouldSelectQuickNavigationResult,
 } from "./lib/quickNavigation";
 // Load route modules on demand; keep their heavy component work behind memo boundaries.
@@ -70,6 +71,7 @@ export default function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [quickQuery, setQuickQuery] = useState("");
   const [quickActiveIndex, setQuickActiveIndex] = useState(0);
+  const [requestedSettingsSection, setRequestedSettingsSection] = useState<string | null>(null);
   const [recentPageIds, setRecentPageIds] = useState<PageId[]>(() => readRecentPageIds(PAGE_IDS) as PageId[]);
   const recentPageIdsRef = useRef(recentPageIds);
   const quickInputRef = useRef<HTMLInputElement>(null);
@@ -79,8 +81,9 @@ export default function App() {
   const quickReturnFocusRef = useRef<HTMLElement | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const pendingRouteFocusRef = useRef(false);
-  const navigate = useCallback((target: PageId, pid?: number, fromQuick = false) => {
+  const navigate = useCallback((target: PageId, pid?: number, fromQuick = false, restoreQuickFocus = true) => {
     const routeChanged = target !== page;
+    if (target !== "settings") setRequestedSettingsSection(null);
     setFocusPid(target === "processes" ? pid ?? null : null);
     if (routeChanged) {
       pendingRouteFocusRef.current = true;
@@ -91,7 +94,7 @@ export default function App() {
     setQuickActiveIndex(0);
     const returnFocus = quickReturnFocusRef.current;
     quickReturnFocusRef.current = null;
-    if (!routeChanged && fromQuick) requestAnimationFrame(() => returnFocus?.focus());
+    if (!routeChanged && fromQuick && restoreQuickFocus) requestAnimationFrame(() => returnFocus?.focus());
 
     const nextRecentPages = nextRecentPageIds(target, recentPageIdsRef.current, PAGE_IDS) as PageId[];
     recentPageIdsRef.current = nextRecentPages;
@@ -107,10 +110,22 @@ export default function App() {
     else toastErr("当前列表已清空，但无法删除本机保存的记录；重启后可能恢复。");
   }, []);
   const quickMatches = useMemo(
-    () => rankNavigationItems(NAV, quickQuery, recentPageIds),
+    () => rankNavigationItems(NAV, quickQuery, recentPageIds, SETTINGS_DEEP_LINKS),
     [quickQuery, recentPageIds],
   );
   const quickSelected = quickMatches[quickActiveIndex];
+  const selectQuickResult = useCallback((item: (typeof quickMatches)[number]) => {
+    if ("routeId" in item) {
+      setRequestedSettingsSection(item.anchor);
+      navigate(item.routeId, undefined, true, false);
+    } else {
+      navigate(item.id, undefined, true);
+    }
+  }, [navigate]);
+  const handleSettingsSectionHandled = useCallback((found: boolean) => {
+    setRequestedSettingsSection(null);
+    if (!found) toastErr("无法定位到该设置区段，请从设置页浏览。");
+  }, []);
   useEffect(() => {
     if (!pendingRouteFocusRef.current) return;
     const frame = requestAnimationFrame(() => {
@@ -272,12 +287,12 @@ export default function App() {
         setQuickActiveIndex((index) => (index - 1 + quickMatches.length) % quickMatches.length);
       } else if (quickOpen && e.key === "Enter" && quickSelected && shouldSelectQuickNavigationResult(document.activeElement, quickInputRef.current, true)) {
         e.preventDefault();
-        navigate(quickSelected.id, undefined, true);
+        selectQuickResult(quickSelected);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeQuick, navigate, quickMatches, quickActiveIndex, quickOpen]);
+  }, [closeQuick, navigate, selectQuickResult, quickMatches, quickActiveIndex, quickOpen]);
 
   const currentPageLabel = NAV.find((item) => item.id === page)?.label ?? "应用";
   return (
@@ -313,7 +328,7 @@ export default function App() {
                   {page === "services" && <MemoServices />}
                   {page === "cleaner" && <MemoCleaner />}
                   {page === "network" && <MemoNetwork />}
-                  {page === "settings" && <MemoSettings admin={admin} onAdmin={setAdmin} appVersion={appVersion} />}
+                  {page === "settings" && <MemoSettings admin={admin} onAdmin={setAdmin} appVersion={appVersion} requestedSection={requestedSettingsSection} onRequestedSectionHandled={handleSettingsSectionHandled} />}
                 </div>
               </Suspense>
             </RouteErrorBoundary>
@@ -327,23 +342,23 @@ export default function App() {
           <section ref={quickDialogRef} role="dialog" aria-modal="true" aria-label="快速跳转" className="glass w-full max-w-xl overflow-hidden border border-white/12 shadow-2xl">
             <div className="flex items-center gap-3 border-b border-white/8 px-4 py-3">
               <Search size={15} className="shrink-0 text-cyan-300" />
-              <input ref={quickInputRef} value={quickQuery} onChange={(event) => setQuickQuery(event.target.value)} placeholder="搜索功能，如 DNS、启动项、临时文件…" className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500" aria-label="搜索功能页面" aria-describedby="quick-results-status quick-search-help" aria-controls="quick-page-results" aria-activedescendant={quickSelected ? `quick-page-${quickSelected.id}` : undefined} />
+              <input ref={quickInputRef} value={quickQuery} onChange={(event) => setQuickQuery(event.target.value)} placeholder="搜索页面或设置区段，如 DNS、更新、撤销…" className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500" aria-label="搜索页面或设置区段" aria-describedby="quick-results-status quick-search-help" aria-controls="quick-navigation-results" aria-activedescendant={quickSelected ? `quick-result-${quickSelected.id}` : undefined} />
               <kbd className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-slate-500">Esc</kbd>
             </div>
             <div id="quick-results-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">
               {quickQuery.trim()
-                ? quickMatches.length ? `找到 ${quickMatches.length} 个匹配页面` : "没有匹配页面"
-                : recentPageIds.length ? `最近使用的页面排在前面，共 ${quickMatches.length} 个页面` : `共 ${quickMatches.length} 个页面；可搜索 DNS、启动项或临时文件`}
+                ? quickMatches.length ? `找到 ${quickMatches.length} 个匹配目标` : "没有匹配页面或设置区段"
+                : recentPageIds.length ? `最近使用的页面排在前面，共 ${quickMatches.length} 个页面` : `共 ${quickMatches.length} 个页面；可搜索 DNS、启动项、更新或隐私`}
             </div>
-            <div ref={quickListRef} id="quick-page-results" role="listbox" aria-label="页面搜索结果" className="max-h-[55vh] overflow-y-auto p-2">
+            <div ref={quickListRef} id="quick-navigation-results" role="listbox" aria-label="快速导航结果" className="max-h-[55vh] overflow-y-auto p-2">
               {quickMatches.length ? quickMatches.map((item, index) => (
-                <div key={item.id} id={`quick-page-${item.id}`} onMouseEnter={() => setQuickActiveIndex(index)} onClick={() => navigate(item.id, undefined, true)} role="option" aria-selected={quickActiveIndex === index} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 ${quickActiveIndex === index ? "bg-cyan-400/12 text-cyan-200" : "text-slate-300 hover:bg-white/8"}`} tabIndex={-1}>
-                  <span className="text-cyan-300">{item.icon}</span><span className="flex-1">{item.label}</span><span className="text-[11px] text-slate-500">{item.quickGroup}</span>
+                <div key={item.id} id={`quick-result-${item.id}`} onMouseEnter={() => setQuickActiveIndex(index)} onClick={() => selectQuickResult(item)} role="option" aria-selected={quickActiveIndex === index} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 ${quickActiveIndex === index ? "bg-cyan-400/12 text-cyan-200" : "text-slate-300 hover:bg-white/8"}`} tabIndex={-1}>
+                  <span className="text-cyan-300">{"routeId" in item ? <CornerDownRight size={14} /> : item.icon}</span><span className="flex-1">{item.label}</span><span className="text-[11px] text-slate-500">{item.quickGroup}</span>
                 </div>
-              )) : <div role="presentation" className="px-3 py-8 text-center text-sm text-slate-500">没有匹配页面</div>}
+              )) : <div role="presentation" className="px-3 py-8 text-center text-sm text-slate-500">没有匹配页面或设置区段</div>}
             </div>
             <div id="quick-search-help" className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 px-4 py-2 text-[10px] text-slate-500">
-              <span>↑↓选择 · Enter 跳转 · Esc 返回 · Ctrl+K 开关</span>
+              <span>↑↓选择 · Enter 跳转/定位 · Esc 返回 · Ctrl+K 开关</span>
               <button type="button" onClick={clearRecentPages} disabled={!recentPageIds.length} aria-label="清除最近使用页面记录" title="只清除本机保存的页面访问顺序" className="rounded px-1.5 py-1 enabled:hover:bg-white/8 enabled:hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-40">清除最近</button>
             </div>
           </section>

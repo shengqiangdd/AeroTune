@@ -28,7 +28,15 @@ import type { ChangeCategoryFilter, ChangeReversibilityFilter } from "../lib/cha
 import { clearLocalObservationHistory, LOCAL_OBSERVATION_HISTORY_TARGETS } from "../lib/localObservationHistory.js";
 import type { LocalObservationHistoryId, LocalObservationHistoryResult } from "../lib/localObservationHistory.js";
 
-export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdmin: (v: boolean) => void; appVersion: string }) {
+type SettingsProps = {
+  admin: boolean;
+  onAdmin: (v: boolean) => void;
+  appVersion: string;
+  requestedSection?: string | null;
+  onRequestedSectionHandled?: (found: boolean) => void;
+};
+
+export function Settings({ admin, onAdmin, appVersion, requestedSection, onRequestedSectionHandled }: SettingsProps) {
   const [changes, setChanges] = useState<Change[]>([]);
   const [changesStatus, setChangesStatus] = useState<"loading" | "ready" | "error">("loading");
   const [changesError, setChangesError] = useState<string | null>(null);
@@ -62,6 +70,28 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
   const [checkingWinget, setCheckingWinget] = useState(false);
   const [wingetResult, setWingetResult] = useState<WingetQueryResult | null>(null);
   const [wingetError, setWingetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestedSection) return;
+    let focusFrame: number | null = null;
+    const scrollFrame = requestAnimationFrame(() => {
+      // Let the route-level main landmark receive focus first; then move focus to this section.
+      focusFrame = requestAnimationFrame(() => {
+        const target = document.getElementById(requestedSection);
+        if (!target) {
+          onRequestedSectionHandled?.(false);
+          return;
+        }
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        target.focus({ preventScroll: true });
+        onRequestedSectionHandled?.(true);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(scrollFrame);
+      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+    };
+  }, [requestedSection, onRequestedSectionHandled]);
 
   const load = useCallback(async () => {
     const requestId = ++changesRequestId.current;
@@ -528,7 +558,7 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
           </div>
         </Card>
 
-        <Card title="本机数据与隐私说明" icon={<ShieldCheck size={15} className="text-emerald-300" />}>
+        <Card id="settings-local-data" focusableTarget title="本机数据与隐私说明" icon={<ShieldCheck size={15} className="text-emerald-300" />}>
           <p className="text-[12px] leading-5 text-slate-400">诊断报告不会自动上传；网络质量检测只在你手动开始时发送 ICMP 探测。更新服务当前未启用。本页内容依据当前源码，尚待产品/法律审阅，不是正式隐私声明。</p>
           <details className="mt-3 rounded-lg border border-white/8 bg-white/3 px-3 py-2">
             <summary className="cursor-pointer text-[12px] font-medium text-cyan-200">查看本机存储、备份和卸载边界</summary>
@@ -576,7 +606,7 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
           </div>
         </Card>
 
-        <Card title="系统还原点" icon={<Power size={15} className="text-emerald-300" />}>
+        <Card id="settings-restore-point" focusableTarget title="系统还原点" icon={<Power size={15} className="text-emerald-300" />}>
           <div className="mb-3 flex items-center gap-2">
             <Btn onClick={createRestore} disabled={creating} className="shrink-0">
               {creating ? "创建中…" : "创建还原点"}
@@ -622,6 +652,8 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
       </div>
 
       <Card
+        id="settings-change-journal"
+        focusableTarget
         className="mt-5"
         title={`变更日志（${changes.length} 条记录，${changes.filter(c => c.revert.t !== "none").length} 条支持还原）`}
         icon={<History size={15} className="text-violet-300" />}
@@ -764,7 +796,7 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
         </div>
       </Card>
 
-      <Card className="mt-5" title="已安装软件更新观察（WinGet）" icon={<RefreshCw size={15} className="text-cyan-300" />}>
+      <Card id="settings-winget-updates" focusableTarget className="mt-5" title="已安装软件更新观察（WinGet）" icon={<RefreshCw size={15} className="text-cyan-300" />}>
         <div className="space-y-3 text-[12px] text-slate-400">
           <p className="leading-5">仅在你主动确认后运行 WinGet 的只读查询。查询可能访问已配置的软件源并更新其缓存，WinGet 也可能按源行为发送查询或包标识；AeroTune 不上传或持久化结果。不接受源协议，不安装或升级软件。WinGet 的表格受系统语言与终端格式影响，AeroTune 只显示原始文本，不解析或声称更新数量完整。</p>
           <Btn variant="ghost" disabled={checkingWinget} onClick={() => void checkWingetUpdates()}>
@@ -784,7 +816,7 @@ export function Settings({ admin, onAdmin, appVersion }: { admin: boolean; onAdm
         </div>
       </Card>
 
-      <Card className="mt-5" title="安全更新" icon={<RefreshCw size={15} className="text-cyan-300" />}>
+      <Card id="settings-security-updates" focusableTarget className="mt-5" title="安全更新" icon={<RefreshCw size={15} className="text-cyan-300" />}>
         <div className="flex flex-wrap items-center gap-3 text-[12px] text-slate-400" aria-live="polite">
           <span>AeroTune v{appVersion}</span>
           {updateReadinessError && <span role="alert" className="text-amber-200">更新状态读取失败：{updateReadinessError}</span>}

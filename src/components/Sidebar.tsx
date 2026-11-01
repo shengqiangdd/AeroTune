@@ -61,7 +61,7 @@ export function Sidebar({
   return (
     <aside className="flex min-h-0 w-52 shrink-0 flex-col gap-1 border-r border-white/6 bg-black/15 px-3 py-4 select-none">
       <nav aria-label="主导航" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <button onClick={onQuickOpen} className="mb-3 flex items-center gap-2 rounded-lg border border-white/8 bg-white/4 px-3 py-2 text-left text-[12px] text-slate-400 transition-colors hover:border-cyan-400/25 hover:bg-white/8 hover:text-slate-200" title="快速跳转页面（Ctrl+K）">
+        <button onClick={onQuickOpen} className="mb-3 flex items-center gap-2 rounded-lg border border-white/8 bg-white/4 px-3 py-2 text-left text-[12px] text-slate-400 transition-colors hover:border-cyan-400/25 hover:bg-white/8 hover:text-slate-200" title="搜索页面或设置区段（Ctrl+K）">
           <Search size={13} /> 快速跳转 <kbd className="ml-auto rounded border border-white/10 px-1 py-0.5 text-[9px]">Ctrl K</kbd>
         </button>
         {groups.map((g) => (

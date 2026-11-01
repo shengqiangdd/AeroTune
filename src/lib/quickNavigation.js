@@ -15,6 +15,50 @@ export const NAVIGATION_SEARCH_TERMS = Object.freeze({
   settings: ["设置", "撤销", "回滚", "恢复", "日志", "变更记录", "管理员", "导入配置", "导出配置"],
 });
 
+// Searchable, navigation-only destinations inside the long Settings page.
+export const SETTINGS_DEEP_LINKS = Object.freeze([
+  {
+    id: "settings-link-change-journal",
+    label: "变更日志与恢复胶囊",
+    group: "设置 · 变更恢复",
+    routeId: "settings",
+    anchor: "settings-change-journal",
+    keywords: ["变更日志", "撤销", "回滚", "恢复胶囊", "还原", "操作记录"],
+  },
+  {
+    id: "settings-link-restore-point",
+    label: "系统还原点",
+    group: "设置 · 变更恢复",
+    routeId: "settings",
+    anchor: "settings-restore-point",
+    keywords: ["还原点", "恢复点", "系统保护", "重大调优"],
+  },
+  {
+    id: "settings-link-privacy-data",
+    label: "本机数据与隐私说明",
+    group: "设置 · 隐私",
+    routeId: "settings",
+    anchor: "settings-local-data",
+    keywords: ["隐私", "本机数据", "本地存储", "数据保留", "清除历史", "诊断数据"],
+  },
+  {
+    id: "settings-link-security-updates",
+    label: "AeroTune 安全更新",
+    group: "设置 · 更新",
+    routeId: "settings",
+    anchor: "settings-security-updates",
+    keywords: ["安全更新", "检查更新", "GitHub Releases", "安装包", "签名", "应用版本"],
+  },
+  {
+    id: "settings-link-winget-updates",
+    label: "WinGet 软件更新观察",
+    group: "设置 · 软件更新",
+    routeId: "settings",
+    anchor: "settings-winget-updates",
+    keywords: ["WinGet", "软件更新", "应用更新", "包管理", "已安装软件"],
+  },
+]);
+
 function browserStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -104,7 +148,7 @@ function normalizeSearchText(value) {
  * @param {string[]} recentIds
  * @returns {(T & { quickGroup: string })[]}
  */
-export function rankNavigationItems(items, query, recentIds = []) {
+export function rankNavigationItems(items, query, recentIds = [], deepLinks = []) {
   const validIds = items.map((item) => item.id);
   const recents = cleanPageIds(recentIds, validIds);
   const byId = new Map(items.map((item) => [item.id, item]));
@@ -119,11 +163,15 @@ export function rankNavigationItems(items, query, recentIds = []) {
   }
 
   const tokens = String(query).split(/[\s\p{P}\p{S}]+/u).map(normalizeSearchText).filter(Boolean);
-  return items
+  const candidates = [...items, ...deepLinks];
+  return candidates
     .map((item, index) => {
       const label = normalizeSearchText(item.label);
       const group = normalizeSearchText(item.group);
-      const keywords = (NAVIGATION_SEARCH_TERMS[item.id] ?? []).map(normalizeSearchText);
+      const keywords = [
+        ...(NAVIGATION_SEARCH_TERMS[item.id] ?? []),
+        ...(Array.isArray(item.keywords) ? item.keywords : []),
+      ].map(normalizeSearchText);
       const searchable = [label, group, ...keywords].join("");
       if (!tokens.every((token) => searchable.includes(token))) return null;
 
@@ -137,9 +185,10 @@ export function rankNavigationItems(items, query, recentIds = []) {
         return total + 100;
       }, 0);
       const recentRank = recents.indexOf(item.id);
-      return { item, index, score, recentRank: recentRank < 0 ? Number.MAX_SAFE_INTEGER : recentRank };
+      const destinationRank = typeof item.routeId === "string" ? 1 : 0;
+      return { item, index, score, destinationRank, recentRank: recentRank < 0 ? Number.MAX_SAFE_INTEGER : recentRank };
     })
     .filter((result) => result !== null)
-    .sort((a, b) => b.score - a.score || a.recentRank - b.recentRank || a.index - b.index)
+    .sort((a, b) => b.score - a.score || b.destinationRank - a.destinationRank || a.recentRank - b.recentRank || a.index - b.index)
     .map(({ item }) => ({ ...item, quickGroup: item.group }));
 }
