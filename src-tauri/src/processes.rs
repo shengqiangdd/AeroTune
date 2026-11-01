@@ -3044,6 +3044,83 @@ mod tests {
         );
     }
 
+    // Command-level latency includes spawn_blocking and the sampler mutex, but not Tauri IPC serialization or UI rendering.
+    #[test]
+    #[ignore = "manual Windows list_processes command latency benchmark"]
+    fn benchmark_list_processes_command_cold_steady_p50_p95() {
+        const COLD_SAMPLES: usize = 41;
+        const STEADY_SAMPLES: usize = 101;
+
+        tauri::async_runtime::block_on(async {
+            tauri::async_runtime::spawn_blocking(|| ())
+                .await
+                .expect("blocking executor should initialize");
+        });
+        let reset_sampler = || {
+            *process_list_sampler_state()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
+        };
+        let command = || {
+            tauri::async_runtime::block_on(list_processes())
+                .expect("list_processes command should return a process snapshot")
+        };
+        let inventory_count = || {
+            process_list_sampler_state()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .map(|sampler| sampler.system.processes().len())
+                .unwrap_or(0)
+        };
+
+        let mut cold = Vec::with_capacity(COLD_SAMPLES);
+        let mut cold_inventory = 0;
+        let mut cold_rows = 0;
+        for _ in 0..COLD_SAMPLES {
+            reset_sampler();
+            let started = Instant::now();
+            let rows = command();
+            cold.push(started.elapsed());
+            assert!(!rows.is_empty(), "cold command should return rows");
+            cold_inventory = inventory_count();
+            cold_rows = rows.len();
+        }
+
+        reset_sampler();
+        let warmup_rows = command();
+        assert!(!warmup_rows.is_empty(), "warmup command should return rows");
+        let steady_inventory = inventory_count();
+        let steady_rows = warmup_rows.len();
+        let mut steady = Vec::with_capacity(STEADY_SAMPLES);
+        for _ in 0..STEADY_SAMPLES {
+            let last_sample = process_list_sampler_state()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .and_then(|sampler| sampler.last_sample);
+            assert!(matches!(
+                process_list_sample_plan(last_sample, Instant::now()),
+                ProcessListSamplePlan::Steady(_)
+            ));
+            let started = Instant::now();
+            let rows = command();
+            steady.push(started.elapsed());
+            assert!(!rows.is_empty(), "steady command should return rows");
+        }
+
+        let (cold_p50, cold_p95) = latency_p50_p95(&mut cold);
+        let (steady_p50, steady_p95) = latency_p50_p95(&mut steady);
+        eprintln!(
+            "list_processes Rust command benchmark (cold={COLD_SAMPLES}, steady={STEADY_SAMPLES}; cold inventory={cold_inventory}, returned={cold_rows}; steady inventory={steady_inventory}, returned={steady_rows}): cold P50/P95={:.3}/{:.3}ms; steady P50/P95={:.3}/{:.3}ms; includes spawn_blocking/mutex, excludes IPC/UI",
+            cold_p50.as_secs_f64() * 1000.0,
+            cold_p95.as_secs_f64() * 1000.0,
+            steady_p50.as_secs_f64() * 1000.0,
+            steady_p95.as_secs_f64() * 1000.0,
+        );
+        reset_sampler();
+    }
+
     #[test]
     fn realtime_priority_requires_explicit_opt_in() {
         assert!(validate_priority_request(2, false).is_ok());

@@ -8,7 +8,9 @@
 
 本阶段将 Optimization Lab 只显示整秒的倒计时从 250ms 改为 1s，减少 75% 无效计时唤醒；采样窗口和性能指标采集频率不变。另以 101 组 Windows 只读微基准比较 RAM-only 与 RAM+swap 传感器刷新（非优化构建）：中位数分别为 0.7µs / 29.3µs，P95 为 0.8µs / 36.1µs。移除每秒不使用的 swap 查询每轮约省 29µs，量级不足以宣称可感知提速，但避免了误导性数据和无效调用。
 
-对 `ProcessListSampler` 做了 101 次 Release 采样：原实现的稳态 P50/P95 为 43.3/60.3ms（334 个进程），复用路径缓冲后为 38.4/66.4ms（325 个进程）；冷启动（含刻意的 300ms CPU 预热）分别为 427.2/460.6ms 与 424.7/474.0ms。样本量和进程数有变、稳态 P95 未改善，故不宣称有确定的延迟收益。原实现对每个可验证进程单独扩展 32,768 个 UTF-16 字符的图片路径缓冲；该轮有 167 个有效令牌，推得每次至少 10.4MiB 临时缓冲分配；现改为复用 sampler 已有的 64KiB 缓冲。此为基于成功身份查询数的分配下界估算，不是堆分析器读数。基准只计 Rust sampler，不含 `spawn_blocking`/锁等待、序列化/IPC 或 React 渲染。下一步应在自然或合成的 >500 进程数据集评估 top-500 限制和命令到界面的延迟，避免通过启动大量真实进程压测；PID 创建时间校验和快照新鲜度保护不得因提速而移除。
+对 `ProcessListSampler` 做了 101 次 Release 采样：原实现的稳态 P50/P95 为 43.3/60.3ms（334 个进程），复用路径缓冲后为 38.4/66.4ms（325 个进程）；冷启动（含刻意的 300ms CPU 预热）分别为 427.2/460.6ms 与 424.7/474.0ms。样本量和进程数有变、稳态 P95 未改善，故不宣称有确定的延迟收益。原实现对每个可验证进程单独扩展 32,768 个 UTF-16 字符的图片路径缓冲；该轮有 167 个有效令牌，推得每次至少 10.4MiB 临时缓冲分配；现改为复用 sampler 已有的 64KiB 缓冲。此为基于成功身份查询数的分配下界估算，不是堆分析器读数。
+
+为补足 sampler 指标，又以 Release 直接调用 `list_processes()` future（41 次冷启动、101 次稳态）测量 command 层：本机清单为 320 行，冷启动 P50/P95 443.3/470.3ms、稳态 47.4/70.2ms。该值包含 `spawn_blocking` 与 sampler 锁，不含 Tauri IPC 序列化、WebView 通信或 React 渲染，不等于用户端到端延迟。另用 20,000 个合成候选做 7 轮 top-500 对比：完整 DTO 物化/排序中位数 12.756ms，先选 500 再物化为 0.440ms，输出行数 20,000→500；它只验证已有选择算法，不包含真实系统枚举、身份查询或 20,000 个真实进程，不能外推为实际应用提速。后续应在普通 UI 使用路径分别测 IPC 与渲染提交延迟；不通过启动大量真实进程压测，也不因这组合成数值调整采样频率。PID 创建时间校验和快照新鲜度保护不得因提速而移除。
 
 算法参考：[windows_exporter 进程采集器](https://github.com/prometheus-community/windows_exporter/blob/main/docs/collector.process.md)的一次清单查询与稳定元数据缓存、[psutil 进程 API](https://github.com/giampaolo/psutil/blob/main/docs/api.rst)的合并读取/对象复用思路，以及 Microsoft 对[性能计数器采样频率](https://learn.microsoft.com/en-us/windows/win32/perfctrs/about-performance-counters)和[系统提交量查询](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getperformanceinfo)的文档。仅借鉴测量和采集模式，不将其他工具中的 tweak 当作效果证据。
 
