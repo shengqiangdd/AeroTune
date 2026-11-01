@@ -2850,7 +2850,7 @@ pub fn start(
             let auto_tick_started = std::time::Instant::now();
             let (actions, memory_relief_enabled) = {
                 let mut st = auto.lock().unwrap();
-                let enabled = st.settings.cpu_scheduler;
+                let memory_relief_enabled = st.settings.auto_memory_relief;
                 let actions = crate::auto::tick(
                     &mut st,
                     &sys,
@@ -2861,7 +2861,7 @@ pub fn start(
                     telemetry,
                     Duration::from_secs_f64(dt_secs),
                 );
-                (actions, enabled)
+                (actions, memory_relief_enabled)
             };
             let auto_tick_elapsed = auto_tick_started.elapsed();
             if auto_tick_elapsed >= Duration::from_millis(250) {

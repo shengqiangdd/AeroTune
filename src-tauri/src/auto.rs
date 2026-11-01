@@ -118,6 +118,9 @@ pub struct AutoSettings {
     /// 自动CPU调度：前台高优先级；低活跃后台使用 EcoQoS。
     #[serde(default = "def_true")]
     pub cpu_scheduler: bool,
+    /// 实验性自动工作集回收；默认关闭，需用户单独确认，不随 CPU 调度或全自动模式启用。
+    #[serde(default)]
+    pub auto_memory_relief: bool,
     /// 调度影子模式：计算候选但不应用 EcoQoS/优先级变化。
     #[serde(default)]
     pub scheduler_shadow: bool,
@@ -160,9 +163,9 @@ pub struct AutoSettings {
     /// 近 7 天场景时长归档（日期 → 场景秒数）
     #[serde(default)]
     pub history: std::collections::BTreeMap<String, std::collections::HashMap<String, u64>>,
-    /// 全自动模式：一键启用整条静默优化栈（场景自适应/电源·EPP·GameDVR/后台 EcoQoS/
-    /// 内存压力缓解/场景名单自动采纳）。只聚合既有自动化，不新增破坏性动作——
-    /// 删文件、结束进程、修改网络与服务永远保持手动。
+    /// 全自动模式：一键启用场景自适应/电源·EPP·GameDVR/后台 EcoQoS/异常自动降级与
+    /// 场景名单自动采纳。实验性工作集回收需单独显式开启，不随全自动模式启用。
+    /// 只聚合既有自动化，不新增破坏性动作——删文件、结束进程、修改网络与服务永远保持手动。
     #[serde(default)]
     pub autopilot: bool,
     /// 全自动模式子开关：持续超阈值的非关键、非前台进程，把"仅提醒"规则升级为
@@ -205,6 +208,7 @@ impl Default for AutoSettings {
             auto_power: true,
             game_boost: true,
             cpu_scheduler: true,
+            auto_memory_relief: false,
             scheduler_shadow: false,
             close_to_tray: true,
             game_list: Vec::new(),
@@ -3999,6 +4003,7 @@ pub fn set_auto_setting(
             "auto_power" => s.auto_power = on,
             "game_boost" => s.game_boost = on,
             "cpu_scheduler" => s.cpu_scheduler = on,
+            "auto_memory_relief" => s.auto_memory_relief = on,
             "scheduler_shadow" => s.scheduler_shadow = on,
             "close_to_tray" => s.close_to_tray = on,
             "adaptive" => s.adaptive = on,
@@ -4069,7 +4074,7 @@ pub fn apply_autopilot(settings: &mut AutoSettings, enabled: bool) -> Result<Str
         settings.cpu_scheduler = true;
         settings.scheduler_shadow = false;
         settings.auto_dispose_anomalies = true;
-        Ok("已开启全自动模式：场景自适应、后台 EcoQoS 压制、内存压力缓解、异常自动降级与场景名单自动采纳将静默运行；已记录当前设置基线，关闭时自动还原。".into())
+        Ok("已开启全自动模式：场景自适应、后台 EcoQoS 压制、异常自动降级与场景名单自动采纳将静默运行；实验性内存工作集回收不会自动开启。已记录当前设置基线，关闭时自动还原。".into())
     } else {
         if !settings.autopilot {
             return Err("全自动模式未开启".into());
@@ -4429,6 +4434,10 @@ mod tests {
             assert!(!settings.auto_game);
             assert!(!settings.auto_power);
             assert!(!settings.cpu_scheduler);
+            assert!(
+                !settings.auto_memory_relief,
+                "legacy settings default experimental memory relief off"
+            );
             assert!(!settings.adaptive);
         }
     }
@@ -4487,6 +4496,7 @@ mod tests {
         assert!(!settings.auto_power);
         assert!(!settings.game_boost);
         assert!(!settings.cpu_scheduler);
+        assert!(!settings.auto_memory_relief);
         assert!(settings.scheduler_shadow);
         assert!(!settings.close_to_tray);
         assert!(settings.rules.is_empty());
@@ -4513,6 +4523,10 @@ mod tests {
         assert!(settings.auto_power);
         assert!(settings.adaptive);
         assert!(settings.close_to_tray);
+        assert!(
+            !settings.auto_memory_relief,
+            "experimental memory relief stays opt-in by default"
+        );
     }
 
     #[test]
@@ -5868,17 +5882,23 @@ mod tests {
             adaptive: false,
             auto_game: true,
             auto_power: false,
+            auto_memory_relief: true,
             scheduler_shadow: true,
             ..Default::default()
         };
         let message = apply_autopilot(&mut settings, true).expect("enable succeeds");
         assert!(message.contains("关闭时自动还原"));
+        assert!(message.contains("实验性内存工作集回收不会自动开启"));
         assert!(settings.autopilot);
         assert!(
             settings.adaptive
                 && settings.auto_power
                 && settings.game_boost
                 && settings.cpu_scheduler
+        );
+        assert!(
+            settings.auto_memory_relief,
+            "autopilot leaves the independent memory-relief choice untouched"
         );
         assert!(
             !settings.scheduler_shadow,

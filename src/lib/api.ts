@@ -349,6 +349,8 @@ export interface AutoSettings {
   auto_power: boolean;
   game_boost: boolean;
   cpu_scheduler: boolean;
+  /** Experimental working-set reclaim; explicitly enabled, not part of CPU scheduling or autopilot. */
+  auto_memory_relief: boolean;
   scheduler_shadow: boolean;
   close_to_tray: boolean;
   game_list: string[];

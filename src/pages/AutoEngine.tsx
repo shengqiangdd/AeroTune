@@ -329,7 +329,7 @@ export function AutoEngine() {
               <Chip tone={setting?.autopilot ? "violet" : "slate"}>{setting?.autopilot ? "全自动运行中" : "未开启"}</Chip>
               {setting?.autopilot_backup && <Chip tone="slate">已备份开启前设置</Chip>}
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-300">一键启用整条静默优化栈：场景识别（游戏 / 影音 / 离开 / 重载 / 电池）、电源计划与 EPP 调优、GameDVR、前台优先、后台 EcoQoS 压制、内存压力缓解，以及场景名单自动采纳——全程无需手动点击，模式切换通过系统通知可见。</p>
+            <p className="mt-1 text-xs leading-5 text-slate-300">一键启用自动场景识别（游戏 / 影音 / 离开 / 重载 / 电池）、电源计划与 EPP 调优、GameDVR、前台优先、后台 EcoQoS 压制、异常自动降级与场景名单自动采纳。实验性工作集回收需单独开启，不会由全自动模式启用。</p>
             <p className="mt-1.5 text-[11px] leading-5 text-slate-500">开启前自动备份相关开关，关闭时按快照还原并恢复系统基线；每次自动采纳进变更日志，可一键移除。边界：不会自动删除文件、结束进程或修改 DNS / 网络 / 服务；进程暂停暂时停用，旧挂起规则仅提醒。</p>
             {setting?.autopilot && (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/15 px-3.5 py-2.5">
@@ -379,8 +379,17 @@ export function AutoEngine() {
             <SchedulerMetric label="监控范围" value={state?.cpu_scheduler ? `${state.cpu_scheduler.monitored_processes} 个进程` : "等待采样"} detail={`后台候选 ${state?.cpu_scheduler?.background_candidates ?? 0} 个`} />
           </div>
           <div className="mt-3 rounded-xl border border-white/6 bg-black/15 px-3.5 py-3 text-xs leading-5 text-slate-400" role="status" aria-label="CPU 调度状态">
-            {state?.cpu_scheduler?.detail ?? "等待 Windows CPU 调度能力检测"}。日常场景下，连续核心饱和至少确认 3 秒（托盘 2 秒采样时约 4 秒）后优先响应，并临时应用可回滚的前台调度偏置；不切换电源计划。该指标用于定位 CPU 瓶颈，不等同于帧时间或输入延迟。引擎保护系统与前台进程；日常场景下最多轻调 10 个稳定、低活跃后台进程（EcoQoS 与 Windows 后台优先级），并保留原值用于恢复。物理内存占用 ≥88% 且可用 ≤4GB 时，每 15 分钟最多回收 2 个大体量空闲进程的工作集；私有提交量保持不变，后续按需回涨。CPU Sets/异构核心分配遵从 Windows 自身调度，避免固定绑核。
+            {state?.cpu_scheduler?.detail ?? "等待 Windows CPU 调度能力检测"}。日常场景下，连续核心饱和至少确认 3 秒（托盘 2 秒采样时约 4 秒）后优先响应，并临时应用可回滚的前台调度偏置；不切换电源计划。该指标用于定位 CPU 瓶颈，不等同于帧时间或输入延迟。引擎保护系统与前台进程；日常场景下最多轻调 10 个稳定、低活跃后台进程（EcoQoS 与 Windows 后台优先级），并保留原值用于恢复。CPU Sets/异构核心分配遵从 Windows 自身调度，避免固定绑核。
           </div>
+        </Card>
+      </div>
+
+      <div className="mb-5">
+        <Card title="实验性自动内存缓解" icon={<Activity size={15} className="text-cyan-300" />} right={
+          <div className="flex flex-wrap items-center justify-end gap-2"><Chip tone={setting?.auto_memory_relief ? "amber" : "slate"}>{!setting ? "读取中" : setting.auto_memory_relief ? "实验选项已开启" : "未启用"}</Chip><Toggle label="实验性自动内存缓解" on={setting?.auto_memory_relief ?? false} disabled={!setting || busy} onChange={(value) => savePreference("auto_memory_relief", value, "实验性自动内存缓解已开启", "实验性自动内存缓解已关闭")} /></div>
+        }>
+          <p className="text-xs leading-5 text-slate-400">仅在物理内存占用 ≥88% 且系统可用物理内存 ≤4GB 时运行；无候选时最多每分钟重新检查，成功后冷却 15 分钟；每次最多尝试回收 2 个大体量、低活跃后台进程的工作集。</p>
+          <p className="mt-2 text-xs leading-5 text-amber-100/80">此实验选项默认关闭，且不随 CPU 调度或全自动模式开启。EmptyWorkingSet 只会暂时降低工作集，不减少私有提交量；页面可能按需重新载入并引入缺页，不能保证提升性能。建议仅在确认存在内存压力时手动开启。</p>
         </Card>
       </div>
 

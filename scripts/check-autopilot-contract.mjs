@@ -16,6 +16,11 @@ assert.match(apiSource, /setAutopilot: \(enabled: boolean\) => invoke<AutoSettin
 assert.match(apiSource, /autopilot: boolean;/);
 assert.match(apiSource, /autopilot_backup: \{[\s\S]*?auto_dispose_anomalies: boolean;\s*\n\s*\} \| null;/);
 assert.match(libSource, /auto::set_autopilot,/);
+assert.match(apiSource, /auto_memory_relief: boolean/);
+assert.match(autoEngineSource, /实验性工作集回收需单独开启，不会由全自动模式启用/);
+const applyAutopilotSource = autoSource.match(/pub fn apply_autopilot\([\s\S]*?\n}/)?.[0];
+assert.ok(applyAutopilotSource, "autopilot pure transition must remain testable");
+assert.doesNotMatch(applyAutopilotSource, /auto_memory_relief/, "autopilot must not silently enable experimental working-set reclaim");
 
 // ---- 备份还原语义 ----
 assert.match(autoSource, /pub struct AutopilotBackup \{/);
@@ -148,4 +153,4 @@ assert.match(
   "sub-toggle reuses the standard settings write path",
 );
 
-console.log("autopilot contract passed: 34 checks");
+console.log("autopilot contract passed: 38 checks");

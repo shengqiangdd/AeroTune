@@ -53,6 +53,7 @@ const checks = [
   { file: "src/pages/Dashboard.tsx", pattern: /recommendationsLoading, setRecommendationsLoading\] = useState\(true\)[\s\S]*refreshRecommendations\(false\)/, description: "dashboard starts smart recommendation focus in an honest loading state" },
   { file: "src/lib/symptomFocus.js", pattern: /(?=.*\["gpu-temperature-high", "gpu"\])(?=.*\["gpu-memory-pressure", "gpu"\])(?=.*process-\\d\+-io)(?=.*recommendation\.priority)(?=.*best = \{ symptom, recommendation \})/s, description: "smart symptom focus maps GPU and process I/O alerts before ranking" },
   { file: "src/pages/AutoEngine.tsx", pattern: /title="Windows CPU 调度引擎"[\s\S]*label="自动 CPU 调度"[\s\S]*role="status" aria-label="CPU 调度状态"/, description: "CPU scheduler has an accessible control and live status region" },
+  { file: "src/pages/AutoEngine.tsx", pattern: /title="实验性自动内存缓解"[\s\S]*label="实验性自动内存缓解"[\s\S]*默认关闭[\s\S]*不随 CPU 调度或全自动模式开启[\s\S]*私有提交量/, description: "experimental working-set relief is separate, opt-in, and discloses its limits" },
   { file: "src/pages/AutoEngine.tsx", pattern: /strategyDecisionViewState\(backendReady, setting\?\.adaptive \?\? null, strategyScores\.length\)/, description: "strategy decision presentation is gated by telemetry readiness and adaptive setting" },
   { file: "src/pages/AutoEngine.tsx", pattern: /(?=.*strategyView === "paused_snapshot")(?=.*暂停前最后一次选择)(?=.*暂停前评分快照)(?=.*暂停期间不会继续评估)(?=.*candidate\.reason)(?=.*candidate\.suitable)(?=.*相对适配程度，不是概率)/s, description: "strategy UI labels stale scores and explains each candidate's relative fit" },
 
