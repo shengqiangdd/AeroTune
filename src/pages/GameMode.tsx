@@ -1,7 +1,7 @@
 // 游戏模式：一键编排 + 独立调优开关 + GPU 应用偏好
 import { useEffect, useRef, useState } from "react";
 import { Gamepad2, MonitorStop, Sparkles, Cpu, Info, Microchip } from "lucide-react";
-import { api, Stats, TweakStates, GpuPref } from "../lib/api";
+import { api, GameModePreview, Stats, TweakStates, GpuPref } from "../lib/api";
 import { Card, Btn, Toggle, Chip, PageHead, ModeBanner } from "../components/ui";
 import { toastOk, toastErr } from "../lib/toast";
 import { ScenarioPreviewCard } from "../components/ScenarioPreviewCard";
@@ -15,15 +15,36 @@ export function GameMode({ stats }: { stats: Stats | null }) {
   const [busy, setBusy] = useState(false);
   const [modeStatus, setModeStatus] = useState<"loading" | "ready" | "error">("loading");
   const modeRequestId = useRef(0);
+  const [modePreview, setModePreview] = useState<GameModePreview | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const refresh = async () => {
     const requestId = ++tweakRequestId.current;
     setStatesStatus("loading");
+    setPreviewStatus("loading");
+    setPreviewError(null);
     try {
-      const value = await api.getTweakStates();
-      if (requestId === tweakRequestId.current) { setStates(value); setStatesStatus("ready"); }
-    } catch {
-      if (requestId === tweakRequestId.current) setStatesStatus("error");
+      const value = await api.getTweakStates("game");
+      if (requestId === tweakRequestId.current) {
+        setStates(value);
+        setStatesStatus("ready");
+        if (value.mode_preview) {
+          setModePreview(value.mode_preview);
+          setPreviewStatus("ready");
+        } else {
+          setModePreview(null);
+          setPreviewError(value.mode_preview_error || "本机状态预检未能签发；请刷新后重试。");
+          setPreviewStatus("error");
+        }
+      }
+    } catch (error) {
+      if (requestId === tweakRequestId.current) {
+        setStatesStatus("error");
+        setModePreview(null);
+        setPreviewError(String(error));
+        setPreviewStatus("error");
+      }
     }
   };
   const loadMode = async () => {
@@ -39,26 +60,67 @@ export function GameMode({ stats }: { stats: Stats | null }) {
   useEffect(() => {
     void loadMode();
     void refresh();
-    return () => { modeRequestId.current += 1; tweakRequestId.current += 1; };
+    return () => {
+      modeRequestId.current += 1;
+      tweakRequestId.current += 1;
+    };
   }, []);
 
+  useEffect(() => {
+    if (!modePreview) return;
+    const timeout = window.setTimeout(() => {
+      setPreviewStatus("error");
+      setPreviewError("游戏模式预检已过期；请刷新后重新查看当前状态。");
+    }, Math.max(0, modePreview.expires_at_unix_ms - Date.now()));
+    return () => window.clearTimeout(timeout);
+  }, [modePreview]);
+
   const toggleMode = async (v: boolean) => {
+    if (busy) return;
+    let previewId: string | null = null;
+    let previewConfirmed = false;
+    if (v) {
+      if (previewStatus !== "ready" || !modePreview) {
+        toastErr("游戏模式本机预检尚未就绪；请刷新预检后再试。");
+        return;
+      }
+      if (Date.now() >= modePreview.expires_at_unix_ms) {
+        toastErr("游戏模式预检已过期；请刷新后确认当前状态。");
+        void refresh();
+        return;
+      }
+      if (modePreview.requires_confirmation) {
+        const summary = modePreview.steps
+          .map((step) => `${step.label}: ${step.current} → ${step.target}`)
+          .join("\n");
+        const confirmed = window.confirm(
+          `预检未发现现成的高性能电源计划。应用时可能复制系统模板；预检本身没有修改系统。\n\n${summary}\n\n继续前会再次核对电源计划、GameDVR 与目标计划 AC EPP。确认应用？`,
+        );
+        if (!confirmed) return;
+        previewConfirmed = true;
+      }
+      previewId = modePreview.preview_id;
+    }
+
     setBusy(true);
     try {
-      const applied = await api.applyMode(v ? "game" : "none");
+      const applied = v
+        ? await api.applyMode("game", previewId!, previewConfirmed)
+        : await api.applyMode("none");
       setOn(v);
       setModeStatus("ready");
-      void refresh();
       toastOk(v ? applied.join("；") : "已退出游戏模式");
     } catch (e) {
       toastErr(e);
-      void refresh();
       void loadMode();
+    } finally {
+      setBusy(false);
+      void refresh();
     }
-    setBusy(false);
   };
 
   const flip = async (key: string, v: boolean) => {
+    if (busy) return;
     try {
       await api.setTweak(key, v);
       void refresh();
@@ -92,7 +154,15 @@ export function GameMode({ stats }: { stats: Stats | null }) {
           <Btn variant="ghost" className="shrink-0" onClick={() => void refresh()}>重试</Btn>
         </div>
       )}
-      <div className="mb-5"><ScenarioPreviewCard mode="game" /></div>
+      <div className="mb-5">
+        <ScenarioPreviewCard
+          mode="game"
+          livePreview={modePreview}
+          previewStatus={previewStatus}
+          previewError={previewError}
+          onRefreshPreview={() => { void refresh(); }}
+        />
+      </div>
 
       <div className="mb-5 grid grid-cols-1 gap-4 2xl:grid-cols-3">
         <Card className="min-w-0 2xl:col-span-2">
@@ -106,7 +176,7 @@ export function GameMode({ stats }: { stats: Stats | null }) {
                 切换到可用的高性能电源计划 · 关闭 GameDVR 后台录制 · 支持时设置 EPP
               </div>
             </div>
-            <Toggle label="游戏模式" on={on} onChange={toggleMode} disabled={busy || modeStatus !== "ready"} />
+            <Toggle label="游戏模式" on={on} onChange={toggleMode} disabled={busy || modeStatus !== "ready" || (!on && (previewStatus !== "ready" || !modePreview || Date.now() >= modePreview.expires_at_unix_ms))} />
           </div>
           <div className="mt-4 flex gap-2 border-t border-white/6 pt-4 text-[12px] text-slate-400">
             <Info size={14} className="mt-px shrink-0 text-cyan-300/80" />
@@ -136,11 +206,20 @@ export function GameMode({ stats }: { stats: Stats | null }) {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card title="GameDVR 后台录制" icon={<MonitorStop size={15} className="text-slate-300" />}>
-          <div className="flex items-center justify-between">
-            <div className="pr-4 text-[13px] text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1 pr-4 text-[13px] text-slate-400">
               Xbox Game Bar / 后台录制即使不使用也会占用编码器与磁盘 IO，关闭可减少帧率波动
             </div>
-            <Toggle label="GameDVR 后台录制" on={states?.gamedvr ?? false} disabled={statesStatus !== "ready" || states?.gamedvr == null} onChange={(v) => flip("gamedvr", v)} />
+            {statesStatus === "ready" && states?.gamedvr != null ? (
+              <Toggle label="GameDVR 后台录制" on={states.gamedvr} disabled={busy} onChange={(v) => flip("gamedvr", v)} />
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
+                <span role={statesStatus === "error" ? "alert" : "status"}>
+                  {statesStatus === "loading" ? "GameDVR 状态读取中…" : "GameDVR 状态未知；控制已禁用。"}
+                </span>
+                {statesStatus !== "loading" && <Btn variant="ghost" className="shrink-0" onClick={() => void refresh()}>重试</Btn>}
+              </div>
+            )}
           </div>
         </Card>
 
@@ -155,7 +234,7 @@ export function GameMode({ stats }: { stats: Stats | null }) {
             <Toggle
               label="硬件加速 GPU 计划（HAGS）"
               on={states?.hags ?? false}
-              disabled={statesStatus !== "ready" || states?.hags == null}
+              disabled={busy || statesStatus !== "ready" || states?.hags == null}
               onChange={(v) => flip("hags", v)}
             />
           </div>
@@ -163,7 +242,7 @@ export function GameMode({ stats }: { stats: Stats | null }) {
       </div>
 
       <div className="mt-4">
-        <EppCard />
+        <EppCard modeBusy={busy} />
       </div>
       <div className="mt-4">
         <GpuPrefCard />
@@ -258,7 +337,7 @@ function GpuPrefCard() {
   );
 }
 
-function EppCard() {
+function EppCard({ modeBusy }: { modeBusy: boolean }) {
   const [epp, setEpp] = useState<number | null>(null);
   const [eppStatus, setEppStatus] = useState<"loading" | "ready" | "error">("loading");
   const [busy, setBusy] = useState(false);
@@ -278,7 +357,7 @@ function EppCard() {
     return () => { eppRequestId.current += 1; };
   }, []);
   const set = async (v: number) => {
-    if (eppStatus !== "ready" || epp == null || busy) return;
+    if (modeBusy || eppStatus !== "ready" || epp == null || busy) return;
     setBusy(true);
     try {
       await api.setEpp(v);
@@ -314,7 +393,7 @@ function EppCard() {
           ].map((o) => (
             <button
               key={o.v}
-              disabled={busy || eppStatus !== "ready" || epp == null}
+              disabled={modeBusy || busy || eppStatus !== "ready" || epp == null}
               onClick={() => void set(o.v)}
               className={`rounded-lg border px-3 py-1.5 text-[12px] transition-all disabled:opacity-40 ${
                 epp === o.v

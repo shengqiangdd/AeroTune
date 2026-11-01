@@ -106,9 +106,11 @@ export interface Plan {
   active: boolean;
 }
 export interface TweakStates {
-  gamedvr: boolean;
+  gamedvr: boolean | null;
   hags: boolean | null;
   priority_boost: boolean;
+  mode_preview?: GameModePreview;
+  mode_preview_error?: string;
 }
 export interface StartupItem {
   id: string;
@@ -232,6 +234,23 @@ export interface ResidencySuggestion {
   avg_mem_mb: number;
   low_cpu_ratio: number;
   last_seen_unix: number;
+}
+export type ModePreviewStatus = "will_change" | "unchanged" | "requires_creation" | "unsupported" | "unknown";
+export interface ModePreviewStep {
+  id: string;
+  label: string;
+  current: string;
+  target: string;
+  status: ModePreviewStatus;
+  note: string | null;
+}
+export interface GameModePreview {
+  mode: "game";
+  observed_at_unix_ms: number;
+  expires_at_unix_ms: number;
+  preview_id: string;
+  requires_confirmation: boolean;
+  steps: ModePreviewStep[];
 }
 /** 实验一致性影子分析：只输出观察结论，绝不自动调参。 */
 export interface ModeConsistency {
@@ -700,9 +719,15 @@ export const api = {
   batteryReport: () => invoke<string>("battery_report"),
   powerDiagnostics: () => invoke<PowerDiagnostics>("power_diagnostics"),
 
-  getTweakStates: () => invoke<TweakStates>("get_tweak_states"),
+  getTweakStates: (previewMode?: "game") =>
+    invoke<TweakStates>("get_tweak_states", { previewMode: previewMode ?? null }),
   setTweak: (key: string, on: boolean) => invoke<string>("set_tweak", { key, on }),
-  applyMode: (mode: string) => invoke<string[]>("apply_mode", { mode }),
+  applyMode: (mode: string, previewId?: string, previewConfirmed?: boolean) =>
+    invoke<string[]>("apply_mode", {
+      mode,
+      previewId: previewId ?? null,
+      previewConfirmed: previewConfirmed ?? null,
+    }),
   getModeState: () => invoke<string>("get_mode_state"),
 
   listStartup: () => invoke<StartupItem[]>("list_startup"),

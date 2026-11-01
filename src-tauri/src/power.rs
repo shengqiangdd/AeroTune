@@ -135,6 +135,7 @@ fn ensure_plan(matcher: impl Fn(&Plan) -> bool, template: &str) -> Result<Plan, 
 
 #[tauri::command]
 pub fn set_power_plan(guid: String) -> Result<(), String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     if !is_valid_power_plan_guid(&guid) {
         return Err("电源计划 GUID 不合法".into());
     }
@@ -253,6 +254,68 @@ pub fn battery_report() -> Result<String, String> {
 const SUB_PROCESSOR: &str = "54533251-82be-4824-96c1-47b60b740d00";
 const PERFEPP: &str = "36687f9e-e3a5-4dbf-b1dc-b15b817ce8c4";
 
+/// Read-only AC EPP state for a specific existing plan. This intentionally does not consult the active plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EppPlanSetting {
+    Unsupported,
+    Unset,
+    Value(u32),
+    Unknown,
+}
+
+fn classify_epp_setting(
+    support: std::io::Result<bool>,
+    value: std::io::Result<Option<u32>>,
+) -> EppPlanSetting {
+    match support {
+        Ok(false) => EppPlanSetting::Unsupported,
+        Err(_) => EppPlanSetting::Unknown,
+        Ok(true) => match value {
+            Ok(Some(value)) => EppPlanSetting::Value(value),
+            Ok(None) => EppPlanSetting::Unset,
+            Err(_) => EppPlanSetting::Unknown,
+        },
+    }
+}
+
+fn epp_plan_ac_setting_path(guid: &str) -> Option<String> {
+    is_valid_power_plan_guid(guid).then(|| {
+        format!(
+            r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{}\{}\{}",
+            guid, SUB_PROCESSOR, PERFEPP
+        )
+    })
+}
+
+pub(crate) fn inspect_epp_plan_setting(guid: &str) -> EppPlanSetting {
+    let Some(plan_path) = epp_plan_ac_setting_path(guid) else {
+        return EppPlanSetting::Unknown;
+    };
+    let base = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
+    let support_path = format!(
+        r"SYSTEM\CurrentControlSet\Control\Power\PowerSettings\{}\{}",
+        SUB_PROCESSOR, PERFEPP
+    );
+    let support = base
+        .open_subkey_with_flags(&support_path, winreg::enums::KEY_READ)
+        .map(|_| true)
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(false)
+            } else {
+                Err(error)
+            }
+        });
+    let value = base
+        .open_subkey_with_flags(&plan_path, winreg::enums::KEY_READ)
+        .and_then(|key| match key.get_value::<u32, _>("ACSettingIndex") {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        });
+    classify_epp_setting(support, value)
+}
+
 /// 当前活动电源计划 GUID（注册表权威值）
 pub fn active_scheme_guid() -> Option<String> {
     let k = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
@@ -315,6 +378,7 @@ pub fn get_epp() -> Option<u32> {
 /// 设置能效偏好并在写入前持久化可验证的恢复状态。
 #[tauri::command]
 pub fn set_epp(v: u32) -> Result<(), String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     if !epp_value_valid(v) {
         return Err("EPP 取值范围 0-100".into());
     }
@@ -567,6 +631,43 @@ pub fn get_proc_max() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn epp_preflight_distinguishes_supported_unset_unsupported_and_unknown() {
+        assert_eq!(
+            classify_epp_setting(Ok(true), Ok(Some(25))),
+            EppPlanSetting::Value(25)
+        );
+        assert_eq!(
+            classify_epp_setting(Ok(true), Ok(None)),
+            EppPlanSetting::Unset
+        );
+        assert_eq!(
+            classify_epp_setting(Ok(false), Err(std::io::Error::other("not inspected"))),
+            EppPlanSetting::Unsupported
+        );
+        assert_eq!(
+            classify_epp_setting(Err(std::io::Error::other("access denied")), Ok(None)),
+            EppPlanSetting::Unknown
+        );
+        assert_eq!(
+            classify_epp_setting(Ok(true), Err(std::io::Error::other("read failed"))),
+            EppPlanSetting::Unknown
+        );
+        assert_eq!(
+            classify_epp_setting(Ok(true), Ok(Some(101))),
+            EppPlanSetting::Value(101)
+        );
+    }
+
+    #[test]
+    fn epp_preflight_reads_the_target_plan_ac_value_not_the_active_plan() {
+        let target = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let path = epp_plan_ac_setting_path(target).unwrap();
+        assert!(path.contains(target));
+        assert!(path.ends_with(PERFEPP));
+        assert!(epp_plan_ac_setting_path("not-a-guid").is_none());
+    }
 
     #[test]
     fn brightness_input_accepts_only_the_wmi_percent_range() {

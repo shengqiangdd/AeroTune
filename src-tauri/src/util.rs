@@ -632,12 +632,16 @@ fn roaming_app_data_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Resolve the AeroTune data path without creating directories or writing files.
+pub fn app_dir_path_read_only() -> Result<PathBuf, String> {
+    Ok(roaming_app_data_dir()?.join("AeroTune"))
+}
+
 /// 应用数据目录（变更日志 / 启动项备份），由当前 Windows token 的已知文件夹解析。
 pub fn app_dir() -> PathBuf {
-    let base = roaming_app_data_dir().unwrap_or_else(|error| {
+    let dir = app_dir_path_read_only().unwrap_or_else(|error| {
         panic!("无法安全解析 AeroTune 用户数据目录：{error}");
     });
-    let dir = base.join("AeroTune");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

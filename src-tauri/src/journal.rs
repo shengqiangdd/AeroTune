@@ -936,6 +936,52 @@ pub fn set_reg_dword(path: &str, value: &str, new: u32, desc: &str) -> Result<()
     })
 }
 
+/// Apply a DWORD only if its current value still matches a previously observed snapshot.
+pub fn set_reg_dword_if_current(
+    path: &str,
+    value: &str,
+    new: u32,
+    expected: Option<u32>,
+    desc: &str,
+) -> Result<(), String> {
+    let expected_old = expected.map(OldVal::Dword).unwrap_or(OldVal::Missing);
+    let applied = applied_dword(new);
+    let mut journal = JOURNAL.lock().unwrap();
+    let old = read_old(path, value)?;
+    if old != expected_old {
+        return Err(format!(
+            "注册表值 {path}\\{value} 在预检后已变化；未执行修改"
+        ));
+    }
+    if old == applied {
+        return Ok(());
+    }
+    if !allowed_hklm_registry_revert(path, value, &old, Some(&applied)) {
+        return Err("机器级注册表目标或取值超出 AeroTune 编译策略；未执行修改".into());
+    }
+    validate_nic_registry_target(path, value, None)?;
+    let revert = Revert::Registry {
+        key: path.to_string(),
+        value: value.to_string(),
+        old: old.clone(),
+        applied: Some(applied.clone()),
+        nic_guid: None,
+    };
+    write_ahead_registry_change_with_journal(
+        &mut journal,
+        desc,
+        revert,
+        old,
+        applied,
+        || {
+            let key = open_registry_key_for_write(path)?;
+            key.set_value(value, &new)
+                .map_err(|e| format!("写入注册表失败 {path}\\{value}: {e}"))
+        },
+        || read_old(path, value),
+    )
+}
+
 pub fn set_nic_reg_dword(
     path: &str,
     value: &str,
@@ -967,6 +1013,31 @@ pub fn set_reg_sz(path: &str, value: &str, new: &str, desc: &str) -> Result<(), 
         key.set_value(value, &new)
             .map_err(|e| format!("写入注册表失败 {path}\\{value}: {e}"))
     })
+}
+
+fn classify_dword_read<K>(
+    key_result: Result<K, std::io::Error>,
+    read_value: impl FnOnce(&K) -> std::io::Result<u32>,
+    path: &str,
+    value: &str,
+) -> Result<Option<u32>, String> {
+    let key = match key_result {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取注册表项失败 {path}: {error}")),
+    };
+    match read_value(&key) {
+        Ok(actual) => Ok(Some(actual)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取注册表值失败 {path}\\{value}: {error}")),
+    }
+}
+
+/// Distinguish an absent DWORD from registry access/type failures for truthful preflight.
+pub fn read_reg_dword_detailed(path: &str, value: &str) -> Result<Option<u32>, String> {
+    let (root, sub) = split_hive(path)?;
+    let key_result = RegKey::predef(root).open_subkey_with_flags(sub, winreg::enums::KEY_READ);
+    classify_dword_read(key_result, |key| key.get_value(value), path, value)
 }
 
 pub fn read_reg_dword(path: &str, value: &str) -> Option<u32> {
@@ -1184,6 +1255,7 @@ fn ensure_confirmed_snapshot(actual: &[Change], expected: &[Change]) -> Result<(
 
 #[tauri::command]
 pub fn revert_change(expected: Change) -> Result<(), String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
     let idx = find_unique_change_index(&j.changes, expected.id)
@@ -1199,6 +1271,7 @@ pub fn revert_change(expected: Change) -> Result<(), String> {
 
 #[tauri::command]
 pub fn revert_change_group(group_id: u64, expected: Vec<Change>) -> Result<usize, String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     revert_change_group_inner(group_id, Some(&expected))
 }
 
@@ -1247,6 +1320,7 @@ fn revert_change_group_inner(group_id: u64, expected: Option<&[Change]>) -> Resu
 
 #[tauri::command]
 pub fn revert_all(expected: Vec<Change>) -> Result<usize, String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
     let targets = j
@@ -1275,6 +1349,7 @@ pub fn revert_all(expected: Vec<Change>) -> Result<usize, String> {
 
 #[tauri::command]
 pub fn clear_journal(expected: Vec<Change>) -> Result<(), String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
     let mut j = JOURNAL.lock().unwrap();
     j.ensure_storage_healthy()?;
     ensure_confirmed_snapshot(&j.changes, &expected)?;
@@ -1473,6 +1548,47 @@ fn do_revert(r: Revert) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn detailed_registry_read_distinguishes_missing_from_unavailable() {
+        let missing_key = classify_dword_read::<()>(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing key",
+            )),
+            |_| unreachable!("missing key must not read a value"),
+            "HKCU\\fixture",
+            "Value",
+        );
+        assert_eq!(missing_key.unwrap(), None);
+
+        let missing_value = classify_dword_read(
+            Ok(()),
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "missing value",
+                ))
+            },
+            "HKCU\\fixture",
+            "Value",
+        );
+        assert_eq!(missing_value.unwrap(), None);
+
+        let denied = classify_dword_read::<()>(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            )),
+            |_| unreachable!("denied key must not read a value"),
+            "HKCU\\fixture",
+            "Value",
+        );
+        assert!(denied.unwrap_err().contains("denied"));
+
+        let present = classify_dword_read(Ok(()), |_| Ok(42), "HKCU\\fixture", "Value");
+        assert_eq!(present.unwrap(), Some(42));
+    }
 
     fn test_journal_path(label: &str) -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);

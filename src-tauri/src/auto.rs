@@ -2162,7 +2162,7 @@ fn knobs_current() -> Knobs {
         plan: active_plan_kind(),
         epp: crate::power::get_epp_value(),
         proc_max: crate::power::get_proc_max().unwrap_or(100).min(100) as u8,
-        gamedvr: st.gamedvr,
+        gamedvr: st.gamedvr.unwrap_or(true),
         prio_boost: st.priority_boost,
         priority_separation: crate::journal::read_reg_dword(
             r"HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl",
@@ -2202,6 +2202,62 @@ fn plan_name(guid: &str) -> String {
         .find(|p| p.guid == guid)
         .map(|p| p.name)
         .unwrap_or_else(|| guid.to_string())
+}
+
+/// Read plan-copy identifiers without creating the AppData directory or writing settings.
+pub(crate) fn plan_guids_for_preview() -> Result<(Option<String>, Option<String>), String> {
+    let path = crate::util::app_dir_path_read_only()?.join("auto_settings.json");
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let settings = parse_settings(&bytes)
+                .map_err(|_| "自动计划配置无法读取，预检不能确定目标计划".to_string())?;
+            Ok((settings.high_plan_guid, settings.saver_plan_guid))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+        Err(_) => Err("自动计划配置读取失败，预检不能确定目标计划".into()),
+    }
+}
+
+/// Resolve only an already-existing target plan. This helper is pure and never persists or duplicates a plan.
+pub(crate) fn preview_existing_plan(
+    kind: &PlanKind,
+    high_plan_guid: Option<&str>,
+    saver_plan_guid: Option<&str>,
+    plans: &[crate::power::Plan],
+) -> Option<crate::power::Plan> {
+    if *kind == PlanKind::Balanced {
+        return plans
+            .iter()
+            .find(|plan| plan.guid == STD_BALANCED)
+            .or_else(|| {
+                plans.iter().find(|plan| {
+                    let name = plan.name.to_lowercase();
+                    name.contains("平衡") || name.contains("balanced")
+                })
+            })
+            .cloned();
+    }
+
+    let (stored, keywords) = match kind {
+        PlanKind::High => (
+            high_plan_guid,
+            &["高性能", "卓越", "high performance", "ultimate"][..],
+        ),
+        PlanKind::Saver => (saver_plan_guid, &["节能", "省电", "power saver"][..]),
+        PlanKind::Balanced => unreachable!(),
+    };
+    if let Some(guid) = stored {
+        if let Some(plan) = plans.iter().find(|plan| plan.guid == guid) {
+            return Some(plan.clone());
+        }
+    }
+    plans
+        .iter()
+        .find(|plan| {
+            let name = plan.name.to_lowercase();
+            keywords.iter().any(|keyword| name.contains(keyword))
+        })
+        .cloned()
 }
 
 /// 解析目标计划：**GUID 持久化追踪**，彻底退役"按名称匹配"。
@@ -2318,8 +2374,16 @@ fn push_decision(ad: &mut Adaptive, from: &str, to: &str, reason: &str) {
     }
 }
 
-/// 应用旋钮组合：每个旋钮只有确认成功才更新快照，失败时由周期校准兜底。
+/// Apply adaptive plan/EPP writes under the same lock used by UI mode previews.
 fn apply_knobs(ad: &mut Adaptive, target: Knobs) {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
+    if crate::tweaks::manual_hold_active() {
+        return;
+    }
+    apply_knobs_locked(ad, target);
+}
+
+fn apply_knobs_locked(ad: &mut Adaptive, target: Knobs) {
     let cur = ad.applied.clone().unwrap_or_else(knobs_current);
     // actual 只累积“已确认达成”的部分；失败的设置保留原快照。
     let mut actual = cur.clone();
@@ -2758,6 +2822,7 @@ impl AutoState {
     }
 
     fn restore_baseline_inner(&mut self) -> Result<(), String> {
+        let _operation_guard = crate::tweaks::lock_mode_operations();
         self.adaptive.priority_separation_gate.reset();
         let mut failures = Vec::new();
         if let Err(error) = restore_scheduler_processes(self) {
@@ -2806,7 +2871,7 @@ impl AutoState {
         let from = self.adaptive.state.clone();
         baseline.plan = active_plan_kind();
         self.adaptive.applied = Some(knobs_current());
-        apply_knobs(&mut self.adaptive, baseline.clone());
+        apply_knobs_locked(&mut self.adaptive, baseline.clone());
         let actual = self.adaptive.applied.clone().unwrap_or_else(knobs_current);
         failures.extend(baseline_restore_mismatches(&baseline, &actual));
         if !failures.is_empty() {
@@ -3088,7 +3153,7 @@ pub fn tick(
             && !ac_online
             && mode != "power"
             && !cooldown
-            && crate::tweaks::apply_mode_core("power").is_ok()
+            && crate::tweaks::apply_mode_core_automatic("power").is_ok()
         {
             state.last_switch = Some(Instant::now());
             actions.push("检测到使用电池，已自动进入省电模式".into());
@@ -3115,7 +3180,7 @@ pub fn tick(
             } else {
                 format!("检测到名单内应用「{}」进入前台", state.last_foreground)
             };
-            if crate::tweaks::apply_mode_core("game").is_ok() {
+            if crate::tweaks::apply_mode_core_automatic("game").is_ok() {
                 state.last_switch = Some(Instant::now());
                 actions.push(format!("{why}，已自动进入游戏模式"));
             }
@@ -4286,6 +4351,47 @@ pub fn get_auto_state(auto: tauri::State<'_, AutoStateLock>) -> AutoStateInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_plan(guid: &str, name: &str) -> crate::power::Plan {
+        crate::power::Plan {
+            guid: guid.into(),
+            name: name.into(),
+            active: false,
+        }
+    }
+
+    #[test]
+    fn preflight_resolves_only_existing_targets_using_apply_priority() {
+        let stored = test_plan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Custom high plan");
+        let named = test_plan("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "High Performance");
+        let plans = vec![stored.clone(), named.clone()];
+        assert_eq!(
+            preview_existing_plan(&PlanKind::High, Some(&stored.guid), None, &plans)
+                .unwrap()
+                .guid,
+            stored.guid
+        );
+        assert_eq!(
+            preview_existing_plan(&PlanKind::High, Some("missing"), None, &plans)
+                .unwrap()
+                .guid,
+            named.guid
+        );
+        assert!(preview_existing_plan(&PlanKind::Saver, None, None, &plans).is_none());
+    }
+
+    #[test]
+    fn preflight_never_creates_a_missing_target_plan() {
+        let plans = vec![test_plan(STD_BALANCED, "Balanced")];
+        assert!(preview_existing_plan(&PlanKind::High, None, None, &plans).is_none());
+        assert!(preview_existing_plan(&PlanKind::Saver, None, None, &plans).is_none());
+        assert_eq!(
+            preview_existing_plan(&PlanKind::Balanced, None, None, &plans)
+                .unwrap()
+                .guid,
+            STD_BALANCED
+        );
+    }
 
     #[test]
     fn legacy_suspend_settings_are_downgraded_with_warning() {
