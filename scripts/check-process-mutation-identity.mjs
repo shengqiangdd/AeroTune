@@ -96,7 +96,7 @@ assert.match(ui, /aria-label=\{rowMutationsDisabled \? `\$\{p\.name\}，PID \$\{
 assert.match(ui, /aria-label=\{rowMutationsDisabled \? `\$\{p\.name\}，PID \$\{p\.pid\}，CPU 亲和性暂不可用/);
 assert.match(ui, /rowMutationsDisabled = processMutationsDisabled \|\| !identityVerified/);
 assert.match(rust, /fn sample\(&mut self\)[\s\S]*?sample_plan\(collect, true\)[\s\S]*?last_creation_filetimes[\s\S]*?mask_unstable_process_row_tokens/);
-assert.match(rust, /fn sample_details\(&mut self\)[\s\S]*?sample_plan\(collect_details, false\)/);
+assert.match(rust, /fn sample_details\(&mut self\)[\s\S]*?sample_plan\([\s\S]*?collect_details\(system, elapsed\)[\s\S]*?false/);
 assert.match(rust, /ProcessListSamplePlan::Warmup[\s\S]*?capture_top_process_filetimes[\s\S]*?self\.system = System::new\(\)[\s\S]*?refresh_processes_specifics[\s\S]*?first_sample = Instant::now\(\)[\s\S]*?std::thread::sleep[\s\S]*?refresh_processes_specifics[\s\S]*?collect_with/);
 assert.match(rust, /ProcessListSamplePlan::Steady\(previous\)[\s\S]*?capture_top_process_filetimes[\s\S]*?unchanged_process_filetimes[\s\S]*?refresh_processes_specifics[\s\S]*?process_list_sample_elapsed\(previous, completed\)[\s\S]*?collect_with/);
 assert.match(rust, /fn unchanged_process_filetimes[\s\S]*?observed\.get\(pid\) == Some\(filetime\)/);

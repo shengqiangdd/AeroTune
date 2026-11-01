@@ -61,7 +61,8 @@ const checks = [
   { file: "src-tauri/src/stats.rs", pattern: /let started_at = process\.start_time\(\)[\s\S]*?let name = process\.name\(\)\.to_string_lossy\(\)[\s\S]*?process_creation_filetime_for_sample\([\s\S]*?started_at[\s\S]*?expected_path\.as_ref\(\)[\s\S]*?proc_creation_filetime_cache\.insert[\s\S]*?set_process_creation_filetimes/, description: "process sampler captures cross-checked FILETIME alongside the sampled row" },
   { file: "src-tauri/src/stats.rs", pattern: /let diagnostic_process_scan_ms = diag_scan_started\.elapsed\(\)\.as_secs_f64\(\) \* 1000\.0[\s\S]*?process_scan_ms \+= diagnostic_process_scan_ms[\s\S]*?process_scan_ms,/, description: "automatic identity-query overhead is included in process-scan timing" },
   { file: "src-tauri/src/processes.rs", pattern: /ProcessListSamplePlan::Warmup[\s\S]*?refresh_processes_specifics\([\s\S]*?sleep\(PROCESS_LIST_WARMUP_INTERVAL\)[\s\S]*?refresh_processes_specifics\(/, description: "process-list sampler warms CPU and IO counters with two samples" },
-  { file: "src-tauri/src/processes.rs", pattern: /fn sample_plan<T>[\s\S]*?ProcessListSamplePlan::Steady\(previous\)[\s\S]*?refresh_processes_specifics\([\s\S]*?process_list_sample_elapsed\(previous, completed\)[\s\S]*?collect_with\(&self\.system, elapsed\)/, description: "steady process-list refresh uses one scan and its real elapsed interval" },
+  { file: "src-tauri/src/processes.rs", pattern: /fn sample_plan<T>[\s\S]*?ProcessListSamplePlan::Steady\(previous\)[\s\S]*?refresh_processes_specifics\([\s\S]*?process_list_sample_elapsed\(previous, completed\)[\s\S]*?collect_with\(&self\.system, elapsed, &mut self\.identity_query_buffer\)/, description: "steady process-list refresh uses one scan, its real elapsed interval, and the sampler-owned identity scratch buffer" },
+  { file: "src-tauri/src/processes.rs", pattern: /struct ProcessListSampler[\s\S]*?identity_query_buffer: Vec<u16>[\s\S]*?fn collect\([\s\S]*?identity_query_buffer: &mut Vec<u16>[\s\S]*?fn process_creation_token\([\s\S]*?image_buffer: &mut Vec<u16>[\s\S]*?process_creation_filetime_for_sample\([\s\S]*?image_buffer[\s\S]*?fn benchmark_process_list_cold_steady_p50_p95[\s\S]*?SAMPLE_COUNT: usize = 101[\s\S]*?latency_p50_p95/, description: "process identity sampling reuses a bounded path buffer and has cold/steady P50/P95 coverage" },
   { file: "src-tauri/src/processes.rs", pattern: /PROCESS_LIST_IDLE_RESET_AFTER[\s\S]*?process_list_sampler_idle[\s\S]*?PROCESS_LIST_CLEANUP_INTERVAL[\s\S]*?\*sampler = None/, description: "idle process-list cache releases retained process metadata" },
   { file: "src-tauri/src/stats.rs", pattern: /pub system_drive: String[\s\S]*?system_drive: system_drive\.clone\(\)/, description: "statistics expose the system drive for aligned evidence" },
   { file: "src/lib/api.ts", pattern: /system_drive: string;/, description: "frontend telemetry types include the system-drive root" },
@@ -96,4 +97,11 @@ for (const check of checks) {
   console.log(`${ok ? "PASS" : "FAIL"} ${check.description}`);
   if (!ok) failed++;
 }
+const processSource = fs.readFileSync("src-tauri/src/processes.rs", "utf8");
+const processCreationToken = processSource.match(/fn process_creation_token\([\s\S]*?\n}/)?.[0] ?? "";
+const identityScratchIsReused = /image_buffer: &mut Vec<u16>/.test(processCreationToken)
+  && /process_creation_filetime_for_sample\([\s\S]*?image_buffer/.test(processCreationToken)
+  && !/Vec::new\(\)/.test(processCreationToken);
+console.log(`${identityScratchIsReused ? "PASS" : "FAIL"} process identity token capture reuses its caller-owned path buffer`);
+if (!identityScratchIsReused) failed++;
 if (failed) process.exitCode = 1;

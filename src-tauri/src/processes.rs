@@ -160,12 +160,16 @@ impl ProcessListSampler {
     }
 
     fn sample_details(&mut self) -> Vec<ProcessDetail> {
-        self.sample_plan(collect_details, false).0
+        self.sample_plan(
+            |system, elapsed, _identity_query_buffer| collect_details(system, elapsed),
+            false,
+        )
+        .0
     }
 
     fn sample_plan<T>(
         &mut self,
-        collect_with: impl Fn(&System, Duration) -> Vec<T>,
+        collect_with: impl Fn(&System, Duration, &mut Vec<u16>) -> Vec<T>,
         verify_row_identity: bool,
     ) -> (Vec<T>, HashMap<u32, u64>) {
         let process_refresh = ProcessRefreshKind::nothing()
@@ -205,7 +209,7 @@ impl ProcessListSampler {
                 let elapsed = process_list_sample_elapsed(first_sample, completed);
                 self.last_sample = Some(completed);
                 (
-                    collect_with(&self.system, elapsed),
+                    collect_with(&self.system, elapsed, &mut self.identity_query_buffer),
                     before_refresh_filetimes,
                 )
             }
@@ -228,7 +232,7 @@ impl ProcessListSampler {
                 let elapsed = process_list_sample_elapsed(previous, completed);
                 self.last_sample = Some(completed);
                 (
-                    collect_with(&self.system, elapsed),
+                    collect_with(&self.system, elapsed, &mut self.identity_query_buffer),
                     before_refresh_filetimes,
                 )
             }
@@ -421,6 +425,7 @@ fn to_proc_info(
     sample_elapsed: Duration,
     cpu_count: usize,
     autostart_names: &HashSet<String>,
+    identity_query_buffer: &mut Vec<u16>,
 ) -> ProcInfo {
     let disk = process.disk_usage();
     let name = process.name().to_string_lossy().into_owned();
@@ -432,7 +437,13 @@ fn to_proc_info(
     let pid = process.pid().as_u32();
     ProcInfo {
         pid,
-        creation_token: process_creation_token(pid, process.start_time(), &name, &path),
+        creation_token: process_creation_token(
+            pid,
+            process.start_time(),
+            &name,
+            &path,
+            identity_query_buffer,
+        ),
         parent_pid: process.parent().map(|parent| parent.as_u32()),
         name,
         cpu: normalize_sysinfo_cpu_usage(process.cpu_usage(), cpu_count),
@@ -576,7 +587,11 @@ fn collect_details(sys: &System, sample_elapsed: Duration) -> Vec<ProcessDetail>
     rows
 }
 
-fn collect(sys: &System, sample_elapsed: Duration) -> Vec<ProcInfo> {
+fn collect(
+    sys: &System,
+    sample_elapsed: Duration,
+    identity_query_buffer: &mut Vec<u16>,
+) -> Vec<ProcInfo> {
     let processes = sys.processes();
     let cpu_count = sys.cpus().len();
     // Keep all role labels in this response on one consistent startup snapshot.
@@ -596,12 +611,28 @@ fn collect(sys: &System, sample_elapsed: Duration) -> Vec<ProcInfo> {
                     right.pid().as_u32(),
                 )
             },
-            |process| to_proc_info(process, sample_elapsed, cpu_count, &autostart_names),
+            |process| {
+                to_proc_info(
+                    process,
+                    sample_elapsed,
+                    cpu_count,
+                    &autostart_names,
+                    identity_query_buffer,
+                )
+            },
         )
     } else {
         processes
             .values()
-            .map(|process| to_proc_info(process, sample_elapsed, cpu_count, &autostart_names))
+            .map(|process| {
+                to_proc_info(
+                    process,
+                    sample_elapsed,
+                    cpu_count,
+                    &autostart_names,
+                    identity_query_buffer,
+                )
+            })
             .collect()
     };
     sort_proc_info_rows(&mut rows);
@@ -1727,14 +1758,14 @@ fn process_creation_token(
     expected_start_unix: u64,
     expected_name: &str,
     expected_path: &str,
+    image_buffer: &mut Vec<u16>,
 ) -> Option<String> {
-    let mut image_buffer = Vec::new();
     process_creation_filetime_for_sample(
         pid,
         expected_start_unix,
         expected_name,
         expected_path,
-        &mut image_buffer,
+        image_buffer,
     )
     .map(format_creation_token)
 }
@@ -2357,6 +2388,52 @@ mod tests {
         assert!(!filetime_matches_unix_start(0, start_unix));
     }
 
+    #[test]
+    fn process_creation_token_reuses_caller_owned_image_buffer() {
+        let pid = std::process::id();
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+        );
+        let process = system
+            .processes()
+            .values()
+            .find(|process| process.pid().as_u32() == pid)
+            .expect("the current test process should be visible to sysinfo");
+        let expected_start_unix = process.start_time();
+        let expected_name = std::env::current_exe()
+            .expect("current test executable path should be available")
+            .file_name()
+            .expect("test executable should have a filename")
+            .to_string_lossy()
+            .into_owned();
+        let mut image_buffer = Vec::new();
+        let first_token = process_creation_token(
+            pid,
+            expected_start_unix,
+            &expected_name,
+            "",
+            &mut image_buffer,
+        )
+        .expect("the current process identity should be queryable");
+        assert!(image_buffer.len() >= PROCESS_IMAGE_PATH_BUFFER_CHARS);
+        let buffer_ptr = image_buffer.as_ptr();
+        let buffer_capacity = image_buffer.capacity();
+        let second_token = process_creation_token(
+            pid,
+            expected_start_unix,
+            &expected_name,
+            "",
+            &mut image_buffer,
+        )
+        .expect("the current process identity should remain queryable");
+        assert_eq!(second_token, first_token);
+        assert_eq!(image_buffer.as_ptr(), buffer_ptr);
+        assert_eq!(image_buffer.capacity(), buffer_capacity);
+    }
+
     fn synthetic_process_info(pid: u32) -> ProcInfo {
         ProcInfo {
             pid,
@@ -2821,7 +2898,7 @@ mod tests {
         let first_sample = Instant::now();
         std::thread::sleep(PROCESS_LIST_WARMUP_INTERVAL);
         system.refresh_processes_specifics(ProcessesToUpdate::All, true, process_refresh);
-        collect(&system, first_sample.elapsed())
+        collect(&system, first_sample.elapsed(), &mut Vec::new())
     }
 
     #[test]
@@ -2870,6 +2947,100 @@ mod tests {
             warmup_elapsed.as_millis(),
             steady_median.as_millis(),
             warmup_rows.len()
+        );
+    }
+
+    fn latency_p50_p95(samples: &mut [Duration]) -> (Duration, Duration) {
+        assert!(!samples.is_empty());
+        samples.sort_unstable();
+        let p50 = samples[samples.len() / 2];
+        let p95_rank = samples.len().saturating_mul(95).div_ceil(100);
+        (p50, samples[p95_rank.saturating_sub(1)])
+    }
+
+    #[test]
+    fn latency_percentiles_use_median_and_nearest_rank_p95() {
+        let mut samples: Vec<_> = (1..=101).map(Duration::from_micros).collect();
+        assert_eq!(
+            latency_p50_p95(&mut samples),
+            (Duration::from_micros(51), Duration::from_micros(96))
+        );
+    }
+
+    // Sampler-only latency: excludes command dispatch, serde/IPC serialization, and React rendering.
+    #[test]
+    #[ignore = "manual Windows process-list cold/steady latency benchmark"]
+    fn benchmark_process_list_cold_steady_p50_p95() {
+        const SAMPLE_COUNT: usize = 101;
+
+        let mut cold = Vec::with_capacity(SAMPLE_COUNT);
+        let mut cold_process_count = 0;
+        let mut cold_returned_rows = 0;
+        let mut cold_verified_rows = 0;
+        for _ in 0..SAMPLE_COUNT {
+            let started = Instant::now();
+            let mut sampler = ProcessListSampler::new();
+            let rows = sampler.sample();
+            cold.push(started.elapsed());
+            assert!(
+                !rows.is_empty(),
+                "cold process inventory should be readable"
+            );
+            cold_process_count = sampler.system.processes().len();
+            cold_returned_rows = rows.len();
+            cold_verified_rows = rows
+                .iter()
+                .filter(|row| row.creation_token.is_some())
+                .count();
+        }
+
+        let mut sampler = ProcessListSampler::new();
+        let warmup = sampler.sample();
+        assert!(
+            !warmup.is_empty(),
+            "warmup process inventory should be readable"
+        );
+        let steady_process_count = sampler.system.processes().len();
+        let steady_returned_rows = warmup.len();
+        let steady_verified_rows = warmup
+            .iter()
+            .filter(|row| row.creation_token.is_some())
+            .count();
+        let mut steady = Vec::with_capacity(SAMPLE_COUNT);
+        for _ in 0..SAMPLE_COUNT {
+            assert!(matches!(
+                process_list_sample_plan(sampler.last_sample, Instant::now()),
+                ProcessListSamplePlan::Steady(_)
+            ));
+            let started = Instant::now();
+            let rows = sampler.sample();
+            steady.push(started.elapsed());
+            assert!(
+                !rows.is_empty(),
+                "steady process inventory should be readable"
+            );
+        }
+
+        let (cold_p50, cold_p95) = latency_p50_p95(&mut cold);
+        let mut cold_without_warmup_sleep: Vec<_> = cold
+            .iter()
+            .map(|elapsed| elapsed.saturating_sub(PROCESS_LIST_WARMUP_INTERVAL))
+            .collect();
+        let (cold_overhead_p50, cold_overhead_p95) =
+            latency_p50_p95(&mut cold_without_warmup_sleep);
+        let (steady_p50, steady_p95) = latency_p50_p95(&mut steady);
+        eprintln!(
+            "process-list sampler benchmark ({SAMPLE_COUNT} trials; cold inventory={cold_process_count}, returned={cold_returned_rows}, verified={cold_verified_rows}; steady inventory={steady_process_count}, returned={steady_returned_rows}, verified={steady_verified_rows}): cold P50/P95={:.3}/{:.3}ms (minus 300ms wait={:.3}/{:.3}ms); steady P50/P95={:.3}/{:.3}ms; prior per-row image-buffer allocation lower bound={:.1}/{:.1}MiB per sample",
+            cold_p50.as_secs_f64() * 1000.0,
+            cold_p95.as_secs_f64() * 1000.0,
+            cold_overhead_p50.as_secs_f64() * 1000.0,
+            cold_overhead_p95.as_secs_f64() * 1000.0,
+            steady_p50.as_secs_f64() * 1000.0,
+            steady_p95.as_secs_f64() * 1000.0,
+            (cold_verified_rows * PROCESS_IMAGE_PATH_BUFFER_CHARS * std::mem::size_of::<u16>()) as f64
+                / (1024.0 * 1024.0),
+            (steady_verified_rows * PROCESS_IMAGE_PATH_BUFFER_CHARS * std::mem::size_of::<u16>()) as f64
+                / (1024.0 * 1024.0),
         );
     }
 
