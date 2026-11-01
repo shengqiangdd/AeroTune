@@ -6,7 +6,7 @@
 
 - 以已公开的 v1.5.10 引导版为起点，计划验收标准 Settings→Rust IPC→有界下载→Minisign/版本/NSIS ZIP 校验→per-machine NSIS 更新路径。
 - 发行工作流通过受保护环境签名；当前 bounded updater 所需的单文件 NSIS ZIP 使用 Tauri `v1Compatible` overlay。普通 Cargo/Tauri 配置仍默认关闭更新。
-- 本版本仅代表 early-access 更新测试候选；真实 GitHub 更新及 UAC/重启结果将在实际验收后记录。取消、并发、安装中断和修复仍未验证。
+- 公开 Release 已由 workflow run `41264899765` 成功发布。已安装的 v1.5.10 实例通过 Settings 安全更新页发现并安装 v1.5.11；更新后手动从 Program Files 重启，进程与卸载注册表均报告 1.5.11。完整资产、签名、代理快照与未覆盖的 UAC/并发/中断/修复边界见 `docs/UPDATER_RELEASE_BLOCKERS.md`；当前 updater 不记录每一跳 redirect。
 
 ## v1.5.10 — 标准 Tauri + GitHub Releases 更新路径（early access）
 

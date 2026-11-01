@@ -29,7 +29,7 @@
 
 ## 发布与安装
 
-源码测试通过不等于安装验收。用户已授权 early-access GitHub 发布：v1.5.10 引导版已公开并通过签名包安装验证；当前工作区准备 v1.5.11，用应用内更新验收真实 GitHub feed。生产密钥位于受保护的 GitHub Environment；release builds 启用更新门。当前 updater 不记录每一跳 redirect；WinHTTP 直连、WinINet 代理关闭已记录，应用内更新结果待验证。UAC 取消、并发、安装中断/占用和修复仍未验证，因此不代表通用 GA。标准 Tauri 路径不提供自定义回滚机制。
+源码测试通过不等于安装验收。early-access GitHub 发布已完成：公开的 v1.5.10 引导版通过签名包安装，之后从该实例通过 Settings 更新到 v1.5.11，手动重启后程序与卸载注册表均报告 1.5.11。WinHTTP 直连、WinINet 代理关闭时更新成功；当前 updater 不记录每一跳 redirect。生产密钥位于受保护的 GitHub Environment；release builds 启用更新门。UAC 取消、配置代理/离线、并发、安装中断/占用和修复仍未验证，因此不代表通用 GA。标准 Tauri 路径不提供自定义回滚机制。
 
 ## 参考项目
 
