@@ -289,16 +289,16 @@ pub struct RuntimeSnapshot {
     pub cpu_pct: f32,
     pub memory_used_gb: f64,
     pub memory_total_gb: f64,
-    pub pagefile_used_gb: f64,
-    pub pagefile_total_gb: f64,
+    pub memory_used_pct: Option<f64>,
+    pub memory_available_physical_gb: Option<f64>,
+    pub system_commit_used_gb: Option<f64>,
+    pub system_commit_limit_gb: Option<f64>,
+    pub system_commit_headroom_gb: Option<f64>,
     pub process_count: usize,
     pub uptime_secs: u64,
     pub sample_id: u64,
     pub health_score: u8,
     pub cpu_frequency_mhz: u64,
-    pub memory_pressure_pct: Option<f64>,
-    pub pagefile_pressure_pct: Option<f64>,
-    pub swap_in_use: bool,
     pub has_sample: bool,
     pub network_rx_kbps: f64,
     pub network_tx_kbps: f64,
@@ -333,8 +333,7 @@ pub struct HealthDeduction {
 fn health_category(label: &str) -> Option<&'static str> {
     match label {
         "CPU 持续高负载" => Some("cpu-sustained-load"),
-        "内存水位偏高" => Some("memory-pressure"),
-        "已使用交换分区" => Some("pagefile-in-use"),
+        "RAM 占用率偏高" => Some("memory-high-usage"),
         "C 盘空间告急" => Some("system-disk-critical"),
         "C 盘空间偏低" => Some("system-disk-low"),
         "启动项过多" => Some("startup-burden"),
@@ -345,8 +344,7 @@ fn health_category(label: &str) -> Option<&'static str> {
 
 fn recommendation_category(id: &str) -> Option<&str> {
     match id {
-        "memory-pressure" => Some("memory-pressure"),
-        "pagefile-pressure" => Some("pagefile-pressure"),
+        "memory-pressure" => Some("memory-usage"),
         "system-disk-low" => Some("system-disk-low"),
         "battery-low" => Some("battery-low"),
         "startup-burden" => Some("startup-burden"),
@@ -384,6 +382,12 @@ fn ratio_percent(used: f64, total: f64) -> Option<f64> {
     Some((used / total * 100.0).clamp(0.0, 100.0))
 }
 
+fn mb_to_gb(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value / 1024.0)
+}
+
 pub fn assemble_diagnostic_report(
     system: SysInfoSnapshot,
     stats: &crate::stats::Stats,
@@ -400,7 +404,7 @@ pub fn assemble_diagnostic_report(
     let anomaly_count =
         anomaly_categories.cpu + anomaly_categories.memory + anomaly_categories.disk_io;
     DiagnosticReport {
-        schema_version: 1,
+        schema_version: 2,
         app_version: env!("CARGO_PKG_VERSION").into(),
         generated_at_utc,
         generated_at_local: chrono::Local::now()
@@ -422,25 +426,17 @@ pub fn assemble_diagnostic_report(
             } else {
                 0.0
             },
-            pagefile_used_gb: if stats.swap_used_gb.is_finite() && stats.swap_used_gb >= 0.0 {
-                stats.swap_used_gb
-            } else {
-                0.0
-            },
-            pagefile_total_gb: if stats.swap_total_gb.is_finite() && stats.swap_total_gb > 0.0 {
-                stats.swap_total_gb
-            } else {
-                0.0
-            },
+            memory_used_pct: ratio_percent(stats.mem_used_gb, stats.mem_total_gb),
+            memory_available_physical_gb: mb_to_gb(diagnostics.memory_available_physical_mb),
+            system_commit_used_gb: mb_to_gb(diagnostics.memory_commit_used_mb),
+            system_commit_limit_gb: mb_to_gb(diagnostics.memory_commit_limit_mb),
+            system_commit_headroom_gb: mb_to_gb(diagnostics.memory_commit_headroom_mb),
             process_count: stats.process_count,
             uptime_secs: stats.uptime_secs,
             sample_id: stats.sample_id,
             health_score: diagnostics.score,
             has_sample: stats.sample_id > 0,
             cpu_frequency_mhz: stats.cpu_freq_mhz,
-            memory_pressure_pct: ratio_percent(stats.mem_used_gb, stats.mem_total_gb),
-            pagefile_pressure_pct: ratio_percent(stats.swap_used_gb, stats.swap_total_gb),
-            swap_in_use: stats.swap_used_gb.is_finite() && stats.swap_used_gb > 0.0,
             network_rx_kbps: finite_nonnegative(stats.net_rx_kbps),
             network_tx_kbps: finite_nonnegative(stats.net_tx_kbps),
             network_today_rx_gb: finite_nonnegative(stats.net_today_rx_gb),
@@ -496,6 +492,8 @@ pub fn assemble_diagnostic_report(
         },
         notes: vec![
             "此报告仅包含系统概况与聚合遥测，不包含进程名称/路径、Wi-Fi 密码或网络凭据。".into(),
+            "内存指标包括可用物理内存及系统提交量/上限；提交量不是当前写入页面文件的字节数。"
+                .into(),
             "保存前请在预览中检查最终 JSON；设备标识和详细遥测可分别选择是否包含。".into(),
         ],
     }
@@ -508,7 +506,8 @@ pub fn export_diagnostic_report(
 ) -> Result<String, String> {
     let sys = get_system_info();
     let stats = cache.stats.read().map_err(|e| e.to_string())?.clone();
-    let diagnostics = diag.lock().map_err(|e| e.to_string())?.current.clone();
+    let mut diagnostics = diag.lock().map_err(|e| e.to_string())?.current.clone();
+    crate::stats::attach_memory_pressure_readout(&mut diagnostics);
     let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
     let recommendations =
         crate::recommendations::recommend_from_snapshots(&stats, &diagnostics, &system_drive);
@@ -887,8 +886,6 @@ mod import_tests {
             mem_used_gb: 8.0,
             mem_total_gb: 16.0,
             cpu_freq_mhz: 3600,
-            swap_used_gb: f64::NAN,
-            swap_total_gb: 8.0,
             process_count: 42,
             uptime_secs: 120,
             net_rx_kbps: 12.5,
@@ -926,6 +923,10 @@ mod import_tests {
         };
         let diagnostics = crate::diag::Diagnostics {
             score: 82,
+            memory_available_physical_mb: Some(4096.0),
+            memory_commit_used_mb: Some(8192.0),
+            memory_commit_limit_mb: Some(16384.0),
+            memory_commit_headroom_mb: Some(8192.0),
             anomalies: vec![
                 crate::diag::Anomaly {
                     pid: 123,
@@ -959,7 +960,7 @@ mod import_tests {
                 },
             ],
             deductions: vec![crate::diag::Deduction {
-                item: "内存水位偏高".into(),
+                item: "RAM 占用率偏高".into(),
                 cost: 8,
             }],
             ..Default::default()
@@ -994,11 +995,14 @@ mod import_tests {
             recommendations,
             "2026-01-01T00:00:00Z".into(),
         );
-        assert_eq!(report.schema_version, 1);
+        assert_eq!(report.schema_version, 2);
         assert_eq!(report.app_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(report.runtime.cpu_pct, 100.0);
-        assert_eq!(report.runtime.memory_pressure_pct, Some(50.0));
-        assert_eq!(report.runtime.pagefile_pressure_pct, None);
+        assert_eq!(report.runtime.memory_used_pct, Some(50.0));
+        assert_eq!(report.runtime.memory_available_physical_gb, Some(4.0));
+        assert_eq!(report.runtime.system_commit_used_gb, Some(8.0));
+        assert_eq!(report.runtime.system_commit_limit_gb, Some(16.0));
+        assert_eq!(report.runtime.system_commit_headroom_gb, Some(8.0));
         assert_eq!(report.runtime.cpu_frequency_mhz, 3600);
         assert_eq!(report.runtime.network_rx_kbps, 12.5);
         assert_eq!(report.runtime.battery_percent, Some(48));
@@ -1011,23 +1015,25 @@ mod import_tests {
         assert_eq!(report.runtime.anomaly_categories.disk_io, 1);
         assert_eq!(
             report.runtime.health_deductions[0].category,
-            "memory-pressure"
+            "memory-high-usage"
         );
         assert_eq!(report.runtime.health_deductions[0].points, 8);
         assert!(!serde_json::to_string(&report)
             .unwrap()
-            .contains("内存水位偏高"));
+            .contains("RAM 占用率偏高"));
         assert_eq!(report.runtime.recommendation_count, 1);
         assert_eq!(
             report.runtime.recommendation_categories,
-            vec!["memory-pressure"]
+            vec!["memory-usage"]
         );
         assert!(!report.generated_at_local.is_empty());
-        assert_eq!(report.runtime.pagefile_used_gb, 0.0);
         assert_eq!(report.runtime.gpu_utilization_pct, Some(100.0));
         assert_eq!(report.runtime.gpu_temperature_c, None);
         assert_eq!(report.runtime.disks.len(), 1);
         let json = serde_json::to_string(&report).unwrap();
+        assert!(!json.contains("pagefile_"));
+        assert!(json.contains("system_commit_used_gb"));
+        assert!(json.contains("不是当前写入页面文件"));
         assert!(!json.contains("process_name"));
         assert!(!json.contains("private-process-name"));
         assert!(!json.contains("another-process"));

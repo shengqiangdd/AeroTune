@@ -1,5 +1,5 @@
 export interface DiagnosticReport {
-  schema_version: 1;
+  schema_version: 2;
   app_version: string;
   generated_at_utc?: string;
   generated_at_local?: string;
@@ -16,16 +16,16 @@ export interface DiagnosticReport {
     cpu_pct?: number;
     memory_used_gb?: number;
     memory_total_gb?: number;
-    pagefile_used_gb?: number;
-    pagefile_total_gb?: number;
+    memory_used_pct?: number | null;
+    memory_available_physical_gb?: number | null;
+    system_commit_used_gb?: number | null;
+    system_commit_limit_gb?: number | null;
+    system_commit_headroom_gb?: number | null;
     process_count?: number;
     uptime_secs?: number;
     sample_id?: number;
     health_score: number;
     cpu_frequency_mhz?: number;
-    memory_pressure_pct?: number | null;
-    pagefile_pressure_pct?: number | null;
-    swap_in_use?: boolean;
     has_sample: boolean;
     network_rx_kbps?: number;
     network_tx_kbps?: number;

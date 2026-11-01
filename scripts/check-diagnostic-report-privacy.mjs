@@ -5,7 +5,7 @@ import { parseDiagnosticReport, redactDiagnosticReport } from "../src/lib/diagno
 const dashboard = readFileSync(new URL("../src/pages/Dashboard.tsx", import.meta.url), "utf8");
 
 const original = {
-  schema_version: 1,
+  schema_version: 2,
   app_version: "1.5.9",
   future_top_level_secret: "FUTURE-TOP-SECRET",
   generated_at_utc: "2026-10-20T09:00:00Z",
@@ -15,16 +15,16 @@ const original = {
     cpu_pct: 18,
     memory_used_gb: 8,
     memory_total_gb: 16,
-    pagefile_used_gb: 1,
-    pagefile_total_gb: 8,
+    memory_used_pct: 50,
+    memory_available_physical_gb: 4,
+    system_commit_used_gb: 12,
+    system_commit_limit_gb: 20,
+    system_commit_headroom_gb: 8,
     process_count: 150,
     uptime_secs: 86400,
     sample_id: 42,
     health_score: 91,
     cpu_frequency_mhz: 3200,
-    memory_pressure_pct: 50,
-    pagefile_pressure_pct: 12.5,
-    swap_in_use: true,
     has_sample: true,
     network_rx_kbps: 8,
     network_tx_kbps: 2,
@@ -54,6 +54,8 @@ assert.equal(safeDefault.system.cores, undefined);
 assert.equal(safeDefault.runtime.gpu_name, undefined);
 assert.equal(safeDefault.generated_at_utc, undefined);
 assert.equal(safeDefault.runtime.network_today_rx_gb, undefined);
+assert.equal(safeDefault.runtime.system_commit_used_gb, undefined);
+assert.equal(safeDefault.runtime.memory_available_physical_gb, undefined);
 assert.equal(safeDefault.runtime.disks, undefined);
 assert.equal(safeDefault.runtime.health_score, 91, "useful aggregate diagnostics remain available by default");
 assert.equal(original.system.host, "LAPTOP-SECRET", "redaction must not mutate the in-memory source report");
@@ -66,6 +68,9 @@ const fullOptIn = redactDiagnosticReport(parsed, { includeDeviceIdentifiers: tru
 assert.equal(fullOptIn.system.host, "LAPTOP-SECRET");
 assert.equal(fullOptIn.runtime.gpu_name, "GPU SECRET");
 assert.equal(fullOptIn.runtime.disks[0].mount, "D:");
+assert.equal(fullOptIn.runtime.memory_available_physical_gb, 4);
+assert.equal(fullOptIn.runtime.system_commit_used_gb, 12);
+assert.equal(fullOptIn.runtime.system_commit_headroom_gb, 8);
 assert.equal(fullOptIn.generated_at_utc, original.generated_at_utc);
 
 assert.throws(() => parseDiagnosticReport("not json"), /无法解析/);

@@ -262,10 +262,9 @@ pub struct Stats {
     pub cpu: f32,
     pub per_core: Vec<f32>,
     pub cpu_freq_mhz: u64,
+    /// Physical RAM counters only. Windows sysinfo swap_* is commit minus physical RAM, not pagefile usage.
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
-    pub swap_used_gb: f64,
-    pub swap_total_gb: f64,
     /// Windows system volume root used to align disk diagnostics and UI evidence.
     pub system_drive: String,
     pub disks: Vec<DiskInfo>,
@@ -903,8 +902,6 @@ mod network_counter_tests {
             cpu_freq_mhz: 3_600,
             mem_used_gb: 12.5,
             mem_total_gb: 32.0,
-            swap_used_gb: 0.5,
-            swap_total_gb: 16.0,
             system_drive: "C:".into(),
             disks: ["C:", "D:", "E:"]
                 .map(|mount| super::DiskInfo {
@@ -1207,25 +1204,48 @@ mod network_counter_tests {
     }
 
     #[test]
-    #[ignore = "manual read-only RAM sensor refresh latency benchmark"]
-    fn benchmark_ram_sensor_refresh_latency() {
+    #[ignore = "manual read-only RAM versus RAM+swap sensor latency benchmark"]
+    fn benchmark_ram_refresh_with_and_without_swap_probe() {
         let mut system = System::new();
-        let refresh_kind = sysinfo::MemoryRefreshKind::nothing().with_ram().with_swap();
-        system.refresh_memory_specifics(refresh_kind);
+        let ram_only = sysinfo::MemoryRefreshKind::nothing().with_ram();
+        let ram_and_swap = ram_only.with_swap();
+        system.refresh_memory_specifics(ram_only);
+        system.refresh_memory_specifics(ram_and_swap);
 
-        let mut samples = Vec::with_capacity(51);
-        for _ in 0..51 {
+        let mut ram_only_samples = Vec::with_capacity(101);
+        let mut ram_and_swap_samples = Vec::with_capacity(101);
+        for sample in 0..101 {
+            let (first_kind, first_samples, second_kind, second_samples) = if sample % 2 == 0 {
+                (
+                    ram_only,
+                    &mut ram_only_samples,
+                    ram_and_swap,
+                    &mut ram_and_swap_samples,
+                )
+            } else {
+                (
+                    ram_and_swap,
+                    &mut ram_and_swap_samples,
+                    ram_only,
+                    &mut ram_only_samples,
+                )
+            };
             let started = Instant::now();
-            system.refresh_memory_specifics(refresh_kind);
-            samples.push(started.elapsed());
+            system.refresh_memory_specifics(first_kind);
+            first_samples.push(started.elapsed());
+            let started = Instant::now();
+            system.refresh_memory_specifics(second_kind);
+            second_samples.push(started.elapsed());
         }
-        samples.sort_unstable();
-        let p95_index = (samples.len() * 95).div_ceil(100) - 1;
+        ram_only_samples.sort_unstable();
+        ram_and_swap_samples.sort_unstable();
+        let p95_index = |len: usize| (len * 95).div_ceil(100) - 1;
         eprintln!(
-            "RAM sensor refresh benchmark: samples={}, median={:?}, p95={:?}",
-            samples.len(),
-            samples[samples.len() / 2],
-            samples[p95_index]
+            "Memory refresh benchmark (101 paired samples): RAM-only median={:?}, p95={:?}; RAM+swap median={:?}, p95={:?}",
+            ram_only_samples[ram_only_samples.len() / 2],
+            ram_only_samples[p95_index(ram_only_samples.len())],
+            ram_and_swap_samples[ram_and_swap_samples.len() / 2],
+            ram_and_swap_samples[p95_index(ram_and_swap_samples.len())],
         );
     }
 
@@ -2361,7 +2381,7 @@ pub fn start(
         let mut timezone_identity_cache = local_timezone_identity();
         let mut last_timezone_identity_refresh = std::time::Instant::now();
         let mut network_sample_at = std::time::Instant::now() - Duration::from_secs(3);
-        let mut memory_cache: Option<(std::time::Instant, (f64, f64, f64, f64))> = None;
+        let mut memory_cache: Option<(std::time::Instant, (f64, f64))> = None;
         let mut last_network_day_persist = std::time::Instant::now() - Duration::from_secs(60);
         let mut last_io_process_starts: HashMap<u32, u64> = HashMap::new();
         let mut proc_io_baseline_established = false;
@@ -2430,14 +2450,13 @@ pub fn start(
             );
             let memory_refresh_ms = if memory_sample_fresh {
                 let refresh_started = Instant::now();
-                sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram().with_swap());
+                // Physical RAM feeds the live sampler. System commit is queried only when diagnostics are read.
+                sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
                 memory_cache = Some((
                     last_instant,
                     (
                         sys.used_memory() as f64 / 1024.0 / 1024.0 / 1024.0,
                         sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0,
-                        sys.used_swap() as f64 / 1024.0 / 1024.0 / 1024.0,
-                        sys.total_swap() as f64 / 1024.0 / 1024.0 / 1024.0,
                     ),
                 ));
                 Some(refresh_started.elapsed().as_secs_f64() * 1000.0)
@@ -2596,8 +2615,6 @@ pub fn start(
                     cpu_freq_mhz: freq,
                     mem_used_gb: memory.0,
                     mem_total_gb: memory.1,
-                    swap_used_gb: memory.2,
-                    swap_total_gb: memory.3,
                     system_drive: system_drive.clone(),
                     disks: disk_cache.clone(),
                     net_rx_kbps: network_rate_kbps(rx_bytes, rate_interval),
@@ -2781,7 +2798,7 @@ pub fn start(
                 diag_sample_at,
                 Duration::from_millis(interval),
             );
-            let process_sample = (stats.cpu, mem_pct, stats.swap_used_gb, stats.uptime_secs);
+            let process_sample = (stats.cpu, mem_pct, stats.uptime_secs);
             last_diag_refresh = Some(diag_sample_at);
             // Observe the sample and derive the controller snapshot under one lock.
             // Re-locking this non-reentrant mutex in the same iteration deadlocked
@@ -2799,9 +2816,9 @@ pub fn start(
                     process_sample.1,
                     &proc_sample_cache,
                     last_startup_count,
-                    process_sample.2,
+                    0.0, // legacy compatibility argument; swap telemetry is no longer sampled.
                     c_used_pct,
-                    process_sample.3,
+                    process_sample.2,
                     refresh_processes_due,
                     io_sample_fresh,
                     memory_sample_fresh,
@@ -2959,7 +2976,139 @@ pub fn get_stats(cache: tauri::State<'_, Arc<Cache>>) -> Stats {
     owned_stats_snapshot(&cache)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MemoryPressureReadout {
+    available_physical_mb: f64,
+    commit_used_mb: f64,
+    commit_limit_mb: f64,
+    commit_headroom_mb: f64,
+}
+
+fn memory_pressure_readout_from_pages(
+    physical_total_pages: u64,
+    physical_available_pages: u64,
+    commit_total_pages: u64,
+    commit_limit_pages: u64,
+    page_size_bytes: u64,
+) -> Option<MemoryPressureReadout> {
+    if physical_total_pages == 0
+        || physical_available_pages > physical_total_pages
+        || commit_limit_pages == 0
+        || commit_total_pages > commit_limit_pages
+        || page_size_bytes == 0
+    {
+        return None;
+    }
+
+    let pages_to_mb = |pages: u64| pages as f64 * page_size_bytes as f64 / (1024.0 * 1024.0);
+    let readout = MemoryPressureReadout {
+        available_physical_mb: pages_to_mb(physical_available_pages),
+        commit_used_mb: pages_to_mb(commit_total_pages),
+        commit_limit_mb: pages_to_mb(commit_limit_pages),
+        commit_headroom_mb: pages_to_mb(commit_limit_pages - commit_total_pages),
+    };
+    [
+        readout.available_physical_mb,
+        readout.commit_used_mb,
+        readout.commit_limit_mb,
+        readout.commit_headroom_mb,
+    ]
+    .iter()
+    .all(|value| value.is_finite() && *value >= 0.0)
+    .then_some(readout)
+}
+
+#[cfg(windows)]
+fn current_memory_pressure_readout() -> Option<MemoryPressureReadout> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetPerformanceInfo, PERFORMANCE_INFORMATION,
+    };
+
+    let cb = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    let mut info = PERFORMANCE_INFORMATION {
+        cb,
+        CommitTotal: 0,
+        CommitLimit: 0,
+        CommitPeak: 0,
+        PhysicalTotal: 0,
+        PhysicalAvailable: 0,
+        SystemCache: 0,
+        KernelTotal: 0,
+        KernelPaged: 0,
+        KernelNonpaged: 0,
+        PageSize: 0,
+        HandleCount: 0,
+        ProcessCount: 0,
+        ThreadCount: 0,
+    };
+    if unsafe { K32GetPerformanceInfo(&mut info, cb) } == 0 {
+        return None;
+    }
+    memory_pressure_readout_from_pages(
+        info.PhysicalTotal as u64,
+        info.PhysicalAvailable as u64,
+        info.CommitTotal as u64,
+        info.CommitLimit as u64,
+        info.PageSize as u64,
+    )
+}
+
+#[cfg(not(windows))]
+fn current_memory_pressure_readout() -> Option<MemoryPressureReadout> {
+    None
+}
+
+pub(crate) fn attach_memory_pressure_readout(diagnostics: &mut crate::diag::Diagnostics) {
+    let readout = current_memory_pressure_readout();
+    diagnostics.memory_available_physical_mb = readout.map(|value| value.available_physical_mb);
+    diagnostics.memory_commit_used_mb = readout.map(|value| value.commit_used_mb);
+    diagnostics.memory_commit_limit_mb = readout.map(|value| value.commit_limit_mb);
+    diagnostics.memory_commit_headroom_mb = readout.map(|value| value.commit_headroom_mb);
+}
+
 #[tauri::command]
 pub fn get_diagnostics(diag: tauri::State<'_, Arc<Mutex<Engine>>>) -> crate::diag::Diagnostics {
-    diag.lock().unwrap().current.clone()
+    let mut current = diag.lock().unwrap().current.clone();
+    attach_memory_pressure_readout(&mut current);
+    current
+}
+
+#[cfg(test)]
+mod memory_pressure_readout_tests {
+    #[cfg(windows)]
+    use super::current_memory_pressure_readout;
+    use super::memory_pressure_readout_from_pages;
+
+    #[test]
+    fn converts_win32_page_counts_to_physical_availability_and_commit_headroom() {
+        let readout = memory_pressure_readout_from_pages(16_384, 4_096, 20_000, 32_768, 4_096)
+            .expect("valid system memory counters");
+        assert_eq!(readout.available_physical_mb, 16.0);
+        assert_eq!(readout.commit_used_mb, 78.125);
+        assert_eq!(readout.commit_limit_mb, 128.0);
+        assert_eq!(readout.commit_headroom_mb, 49.875);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_performance_info_returns_a_valid_system_memory_snapshot() {
+        let readout = current_memory_pressure_readout()
+            .expect("GetPerformanceInfo should return a validated memory snapshot");
+        assert!(readout.available_physical_mb.is_finite());
+        assert!(readout.available_physical_mb >= 0.0);
+        assert!(readout.commit_used_mb.is_finite());
+        assert!(readout.commit_limit_mb.is_finite());
+        assert!(readout.commit_limit_mb > 0.0);
+        assert!(readout.commit_used_mb <= readout.commit_limit_mb);
+        assert!(readout.commit_headroom_mb >= 0.0);
+    }
+
+    #[test]
+    fn invalid_or_inconsistent_page_counts_fail_closed() {
+        assert!(memory_pressure_readout_from_pages(0, 0, 1, 2, 4096).is_none());
+        assert!(memory_pressure_readout_from_pages(100, 101, 1, 2, 4096).is_none());
+        assert!(memory_pressure_readout_from_pages(100, 50, 3, 2, 4096).is_none());
+        assert!(memory_pressure_readout_from_pages(100, 50, 1, 0, 4096).is_none());
+        assert!(memory_pressure_readout_from_pages(100, 50, 1, 2, 0).is_none());
+    }
 }

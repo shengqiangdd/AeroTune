@@ -56,6 +56,26 @@ function duration(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`;
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`;
 }
+function formatMemoryMb(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "未测量";
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${value.toFixed(0)} MB`;
+}
+function formatCommitReadout(diag: Diagnostics | null): { usage: string; headroom: string } {
+  const used = diag?.memory_commit_used_mb;
+  const limit = diag?.memory_commit_limit_mb;
+  const headroom = diag?.memory_commit_headroom_mb;
+  if (
+    used == null || limit == null || headroom == null
+    || !Number.isFinite(used) || !Number.isFinite(limit) || !Number.isFinite(headroom)
+    || used < 0 || limit <= 0 || headroom < 0 || used > limit || headroom > limit
+  ) {
+    return { usage: "未测量", headroom: "未测量" };
+  }
+  return {
+    usage: `${formatMemoryMb(used)} / ${formatMemoryMb(limit)}`,
+    headroom: formatMemoryMb(headroom),
+  };
+}
 
 export function AutoEngine() {
   const [state, setState] = useState<AutoStateInfo | null>(null);
@@ -157,6 +177,7 @@ export function AutoEngine() {
   const todayTotal = Object.values(seconds).reduce((sum, n) => sum + n, 0);
   const topMode = useMemo(() => Object.entries(seconds).sort((a, b) => b[1] - a[1])[0], [seconds]);
   const memoryStatus = memoryPressureStatus(diag);
+  const memoryCommit = formatCommitReadout(diag);
   const memoryEtaLabel = !backendReady || memoryStatus.etaSeconds === null
     ? null
     : memoryStatus.etaSeconds < 60
@@ -464,6 +485,7 @@ export function AutoEngine() {
             <span className="shrink-0 text-2xl font-semibold tabular-nums text-white">
               {backendReady && memoryStatus.percentValid ? `${memoryStatus.percent.toFixed(0)}%` : "—"}
             </span>
+            <span className="text-[11px] text-slate-500">RAM 占用率</span>
             <span className={`min-w-0 break-words text-xs ${memoryStatus.tone === "warning" ? "text-amber-300" : memoryStatus.tone === "good" ? "text-emerald-300" : "text-slate-400"}`}>
               {memoryStatus.label}
             </span>
@@ -476,7 +498,18 @@ export function AutoEngine() {
               />
             </div>
           )}
-          <p className="mt-2 break-words text-xs text-slate-500">{memoryEtaLabel ? `若近 45 秒趋势延续，约 ${memoryEtaLabel} 接近 90%（线性估算）。` : "持续关注系统趋势；只有明显压力时才提示处理。"}</p>
+          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs" aria-label="系统物理内存与提交量">
+            <div className="rounded-lg border border-white/6 bg-black/15 px-2.5 py-2">
+              <dt className="text-slate-500">可用物理内存</dt>
+              <dd className="mt-1 font-medium tabular-nums text-slate-200">{formatMemoryMb(backendReady ? diag?.memory_available_physical_mb : null)}</dd>
+            </div>
+            <div className="rounded-lg border border-white/6 bg-black/15 px-2.5 py-2">
+              <dt className="text-slate-500">系统提交量 / 上限</dt>
+              <dd className="mt-1 font-medium tabular-nums text-slate-200">{memoryCommit.usage}</dd>
+              <dd className="mt-0.5 text-[10px] text-slate-500">余量 {memoryCommit.headroom}</dd>
+            </div>
+          </dl>
+          <p className="mt-2 break-words text-xs text-slate-500">{memoryEtaLabel ? `若近 45 秒占用率趋势延续，约 ${memoryEtaLabel} 接近 90%（线性估算）。` : "该趋势只反映 RAM 占用率；高占用不等于提交上限将满。"} 可用物理内存包含可立即重用的待机页；提交量/上限不是当前写入页面文件的字节数。</p>
         </Card>
         <Card title="10 秒 CPU 趋势预报" icon={<Activity size={15} className="text-cyan-300" />}>
           {!backendReady || !diag?.cpu_forecast_ready ? (

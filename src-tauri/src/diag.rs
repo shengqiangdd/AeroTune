@@ -241,11 +241,17 @@ pub struct Diagnostics {
     pub io_baseline_warming_processes: usize,
     pub mem_slope: f32,
     pub mem_pct: f32,
+    /// Latest Win32 physical-memory availability from GetPerformanceInfo; None when unavailable.
+    pub memory_available_physical_mb: Option<f64>,
+    /// System-wide committed bytes and limit, converted from pages using GetPerformanceInfo.PageSize.
+    pub memory_commit_used_mb: Option<f64>,
+    pub memory_commit_limit_mb: Option<f64>,
+    pub memory_commit_headroom_mb: Option<f64>,
     /// True when the 45-second window contains enough valid readings for a trend decision.
     pub mem_slope_ready: bool,
     /// Distinct valid memory sensor readings in the 45-second trend window (0–45).
     pub mem_slope_sample_count: u8,
-    /// Linear ETA to 90% RAM pressure; present only for >=20 distinct readings, 78–<90%, rising trends, and <=3 minutes.
+    /// Linear ETA to 90% RAM occupancy; present only for >=20 distinct readings, 78–<90%, rising trends, and <=3 minutes.
     pub mem_critical_eta_secs: Option<u32>,
     /// Robust CPU trend in percentage points per second; finite only after warm-up.
     pub cpu_trend_pct_per_sec: f32,
@@ -698,7 +704,8 @@ impl Engine {
         mem_pct: f32,
         procs: &[ProcSample],
         startup_count: usize,
-        swap_gb: f64,
+        // sysinfo on Windows reports commit beyond physical RAM here, not pagefile bytes.
+        _swap_gb: f64,
         c_used_pct: f64,
         uptime_secs: u64,
         process_sample_fresh: bool,
@@ -896,10 +903,7 @@ impl Engine {
             );
         }
         if mem_pct > 80.0 {
-            deduct("内存水位偏高", (mem_pct - 80.0) * 1.2, 25.0, &mut ded);
-        }
-        if swap_gb > 0.5 {
-            deduct("已使用交换分区", 8.0, 8.0, &mut ded);
+            deduct("RAM 占用率偏高", (mem_pct - 80.0) * 1.2, 25.0, &mut ded);
         }
         if c_used_pct > 90.0 {
             deduct("C 盘空间告急", 15.0, 15.0, &mut ded);
@@ -3034,6 +3038,20 @@ mod tests {
             serialized_recovery["cpu_forecast_ready"].as_bool(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn sysinfo_commit_over_physical_value_does_not_penalize_health_as_pagefile_use() {
+        let mut no_commit_over_ram = Engine::new();
+        let mut commit_over_ram = Engine::new();
+        no_commit_over_ram.observe(10.0, 50.0, vec![], 0, 0.0, 0.0, 0);
+        commit_over_ram.observe(10.0, 50.0, vec![], 0, 8.0, 0.0, 0);
+        assert_eq!(
+            no_commit_over_ram.current.score,
+            commit_over_ram.current.score
+        );
+        assert!(no_commit_over_ram.current.deductions.is_empty());
+        assert!(commit_over_ram.current.deductions.is_empty());
     }
 
     #[test]

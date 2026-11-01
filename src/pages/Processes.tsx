@@ -544,9 +544,9 @@ export function Processes({ focusPid = null, cpuLoadBand = "unknown", memoryLoad
             <Chip tone={auto ? "green" : "slate"}>
               <button
                 aria-pressed={auto}
-                aria-label={auto ? `关闭自动刷新；当前间隔 ${Math.round(autoRefreshMs / 1000)} 秒` : "开启自动刷新，按 CPU、内存压力和至少 20 个交互样本调整扫描间隔"}
+                aria-label={auto ? `关闭自动刷新；当前间隔 ${Math.round(autoRefreshMs / 1000)} 秒` : "开启自动刷新，按 CPU、RAM 占用率和至少 20 个交互样本调整扫描间隔"}
                 onClick={() => setAuto((value) => !value)}
-                title={auto ? `当前间隔 ${Math.round(autoRefreshMs / 1000)} 秒；CPU、内存压力或基于至少 20 个样本的交互 P95 偏高时自动放缓` : "启动后按 CPU、内存压力及可选的交互 P95（至少 20 个样本）调整扫描间隔"}
+                title={auto ? `当前间隔 ${Math.round(autoRefreshMs / 1000)} 秒；CPU、RAM 占用率或基于至少 20 个样本的交互 P95 偏高时自动放缓` : "启动后按 CPU、RAM 占用率及可选的交互 P95（至少 20 个样本）调整扫描间隔"}
               >
                 {auto ? `自动刷新 · 开 · ${Math.round(autoRefreshMs / 1000)}s` : "自动刷新 · 关"}
               </button>

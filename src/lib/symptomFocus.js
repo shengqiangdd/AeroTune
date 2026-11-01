@@ -1,7 +1,6 @@
 const FIXED_TARGETS = new Map([
   ["gpu-temperature-high", "gpu"],
   ["gpu-memory-pressure", "gpu"],
-  ["pagefile-pressure", "memory"],
   ["memory-pressure", "memory"],
   ["startup-burden", "startup"],
   ["battery-low", "battery"],

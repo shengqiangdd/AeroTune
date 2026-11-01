@@ -58,8 +58,8 @@ const SYMPTOMS: {
     page: "processes",
     pageLabel: "进程管理",
     checklist: [
-      "查看内存占用与页面文件使用量；若持续走高，可在进程管理中找出主要占用者。",
-      "比较一段时间内的内存趋势，并留意是否有应用持续增长。",
+      "核对可用物理内存与系统提交量/上限；RAM 占用率高本身不等于提交量或物理内存压力。",
+      "系统提交量不是当前写入页面文件的字节数；结合趋势定位持续增长的应用。",
     ],
   },
   {
@@ -159,6 +159,11 @@ function percent(value: number): string {
   return `${value.toFixed(0)}%`;
 }
 
+function formatMemoryMb(value: number | null | undefined): string {
+  if (!finite(value) || value < 0) return "未测量";
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${value.toFixed(0)} MB`;
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   if (!finite(seconds) || seconds < 0) return "系统未提供剩余时间估算";
   const hours = Math.floor(seconds / 3600);
@@ -184,7 +189,7 @@ function evidenceFor(id: SymptomId, stats: Stats | null, diagnostics: Diagnostic
   if (id === "memory") {
     const memoryStats = stats && validCapacityPair(stats.mem_used_gb, stats.mem_total_gb) ? stats : null;
     add(
-      "系统报告内存已用",
+      "系统报告 RAM 已用",
       memoryStats
         ? `${percent((memoryStats.mem_used_gb / memoryStats.mem_total_gb) * 100)}（已用 ${memoryStats.mem_used_gb.toFixed(1)} / 总量 ${memoryStats.mem_total_gb.toFixed(1)} GB）`
         : "内存容量数据不可用",
@@ -195,17 +200,36 @@ function evidenceFor(id: SymptomId, stats: Stats | null, diagnostics: Diagnostic
       && diagnosticMemoryPercent >= 0
       && diagnosticMemoryPercent <= 100;
     add(
-      "诊断内存水位",
+      "诊断 RAM 占用率",
       diagnosticMemoryValid
         ? percent(diagnosticMemoryPercent)
-        : diagnostics ? "诊断水位数据无效" : "诊断数据不可用",
+        : diagnostics ? "诊断 RAM 占用率无效" : "诊断数据不可用",
       diagnosticMemoryValid,
     );
-    const swapValid = stats && validCapacityPair(stats.swap_used_gb, stats.swap_total_gb);
+    const availablePhysicalMb = diagnostics?.memory_available_physical_mb;
+    const availablePhysicalValid = finite(availablePhysicalMb) && availablePhysicalMb >= 0;
     add(
-      "页面文件",
-      swapValid ? `${stats.swap_used_gb.toFixed(1)} / ${stats.swap_total_gb.toFixed(1)} GB` : stats ? "容量或使用量未提供" : "等待遥测",
-      !!swapValid,
+      "可用物理内存",
+      availablePhysicalValid ? formatMemoryMb(availablePhysicalMb) : diagnostics ? "诊断数据不可用" : "等待诊断",
+      availablePhysicalValid,
+    );
+    const commitUsedMb = diagnostics?.memory_commit_used_mb;
+    const commitLimitMb = diagnostics?.memory_commit_limit_mb;
+    const commitHeadroomMb = diagnostics?.memory_commit_headroom_mb;
+    const commitReadoutValid = finite(commitUsedMb)
+      && finite(commitLimitMb)
+      && finite(commitHeadroomMb)
+      && commitUsedMb >= 0
+      && commitLimitMb > 0
+      && commitHeadroomMb >= 0
+      && commitHeadroomMb <= commitLimitMb
+      && commitUsedMb <= commitLimitMb;
+    add(
+      "系统提交量 / 上限",
+      commitReadoutValid
+        ? `${formatMemoryMb(commitUsedMb)} / ${formatMemoryMb(commitLimitMb)}（余量 ${formatMemoryMb(commitHeadroomMb)}）`
+        : diagnostics ? "诊断数据不可用" : "等待诊断",
+      commitReadoutValid,
     );
     const memoryTrendSampleCount = diagnostics && finite(diagnostics.mem_slope_sample_count)
       ? Math.max(0, Math.min(MEMORY_SLOPE_WINDOW, Math.trunc(diagnostics.mem_slope_sample_count)))
@@ -217,7 +241,7 @@ function evidenceFor(id: SymptomId, stats: Stats | null, diagnostics: Diagnostic
     add(
       "内存趋势",
       memoryTrendReady
-        ? `${diagnostics!.mem_slope.toFixed(2)} 个百分点 / 秒${memoryEtaSeconds !== null ? `；若趋势延续，线性估算约 ${memoryEtaSeconds} 秒接近 90%` : ""}`
+        ? `${diagnostics!.mem_slope.toFixed(2)} 个百分点 / 秒${memoryEtaSeconds !== null ? `；若趋势延续，RAM 占用率线性估算约 ${memoryEtaSeconds} 秒接近 90%` : ""}`
         : diagnostics && !diagnostics.mem_slope_ready
           ? memoryTrendSampleCount < MEMORY_SLOPE_MIN_SAMPLES
             ? `有效实测读数 ${memoryTrendSampleCount}/${MEMORY_SLOPE_MIN_SAMPLES}，趋势暂不判断`

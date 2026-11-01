@@ -4,9 +4,9 @@
 
 ## 性能、内存与可用性（当前优先）
 
-把“Windows 更快/更稳”落到可复测的数据，不把高 RAM 占用、单次分数或注册表开关直接当作优化效果。先保持低成本系统采样与慢速进程清单分离；记录冷启动/稳态扫描的耗时和数据新鲜度，再决定是否调整频率。内存策略优先区分可用物理内存与系统提交量；不因 RAM 使用率高就自动清理工作集。工作集回收现为独立实验开关、默认关闭，不随 CPU 调度或全自动模式静默启用。慢速传感器或诊断故障不得阻塞核心采样。
+把“Windows 更快/更稳”落到可复测的数据，不把高 RAM 占用、单次分数或注册表开关直接当作优化效果。先保持低成本系统采样与慢速进程清单分离；记录冷启动/稳态扫描的耗时和数据新鲜度，再决定是否调整频率。内存策略优先区分可用物理内存与系统提交量；不因 RAM 使用率高就自动清理工作集。GetPerformanceInfo 只在诊断读取时报告可用物理内存及提交量/上限；sysinfo 的 Windows `swap_*` 表示超出物理 RAM 的提交量，不是页面文件写入量，因此移除了据此触发的页面文件压力建议和健康扣分。工作集回收现为独立实验开关、默认关闭，不随 CPU 调度或全自动模式静默启用。慢速传感器或诊断故障不得阻塞核心采样。
 
-本阶段将 Optimization Lab 只显示整秒的倒计时从 250ms 改为 1s，减少 75% 无效计时唤醒；采样窗口和性能指标采集频率不变。下一步先测大量进程下的冷/稳态 `list_processes` P50/P95，再评估是否优化重采样；PID 创建时间校验和快照新鲜度保护不得因提速而移除。
+本阶段将 Optimization Lab 只显示整秒的倒计时从 250ms 改为 1s，减少 75% 无效计时唤醒；采样窗口和性能指标采集频率不变。另以 101 组 Windows 只读微基准比较 RAM-only 与 RAM+swap 传感器刷新（非优化构建）：中位数分别为 0.7µs / 29.3µs，P95 为 0.8µs / 36.1µs。移除每秒不使用的 swap 查询每轮约省 29µs，量级不足以宣称可感知提速，但避免了误导性数据和无效调用。下一步先测大量进程下的冷/稳态 `list_processes` P50/P95，再评估是否优化重采样；PID 创建时间校验和快照新鲜度保护不得因提速而移除。
 
 算法参考：[windows_exporter 进程采集器](https://github.com/prometheus-community/windows_exporter/blob/main/docs/collector.process.md)的一次清单查询与稳定元数据缓存、[psutil 进程 API](https://github.com/giampaolo/psutil/blob/main/docs/api.rst)的合并读取/对象复用思路，以及 Microsoft 对[性能计数器采样频率](https://learn.microsoft.com/en-us/windows/win32/perfctrs/about-performance-counters)和[系统提交量查询](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getperformanceinfo)的文档。仅借鉴测量和采集模式，不将其他工具中的 tweak 当作效果证据。
 

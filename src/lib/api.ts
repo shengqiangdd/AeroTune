@@ -18,8 +18,6 @@ export interface Stats {
   cpu_freq_mhz: number;
   mem_used_gb: number;
   mem_total_gb: number;
-  swap_used_gb: number;
-  swap_total_gb: number;
   system_drive: string;
   disks: DiskInfo[];
   net_rx_kbps: number;
@@ -323,6 +321,10 @@ export interface Diagnostics {
   io_baseline_warming_processes: number;
   mem_slope: number;
   mem_pct: number | null;
+  memory_available_physical_mb: number | null;
+  memory_commit_used_mb: number | null;
+  memory_commit_limit_mb: number | null;
+  memory_commit_headroom_mb: number | null;
   mem_slope_ready: boolean;
   mem_slope_sample_count: number;
   mem_critical_eta_secs: number | null;

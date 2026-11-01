@@ -13,15 +13,15 @@ const RUNTIME_DETAIL_FIELDS = [
   "cpu_pct",
   "memory_used_gb",
   "memory_total_gb",
-  "pagefile_used_gb",
-  "pagefile_total_gb",
+  "memory_used_pct",
+  "memory_available_physical_gb",
+  "system_commit_used_gb",
+  "system_commit_limit_gb",
+  "system_commit_headroom_gb",
   "process_count",
   "uptime_secs",
   "sample_id",
   "cpu_frequency_mhz",
-  "memory_pressure_pct",
-  "pagefile_pressure_pct",
-  "swap_in_use",
   "network_rx_kbps",
   "network_tx_kbps",
   "network_today_rx_gb",
@@ -59,7 +59,7 @@ export function parseDiagnosticReport(json) {
   }
   if (
     !isRecord(value)
-    || value.schema_version !== 1
+    || value.schema_version !== 2
     || typeof value.app_version !== "string"
     || !isRecord(value.system)
     || !isRecord(value.runtime)
@@ -106,7 +106,7 @@ export function redactDiagnosticReport(report, options) {
   }
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     app_version: report.app_version,
     ...(options.includeDetailedTelemetry && typeof report.generated_at_utc === "string"
       ? { generated_at_utc: report.generated_at_utc }

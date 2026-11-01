@@ -63,9 +63,9 @@ pub fn recommend_from_snapshots(
         if diag.mem_pct >= MEMORY_CRITICAL_PCT {
             out.push(suggestion(
                 "memory-pressure",
-                "检查高内存占用进程",
+                "核对高 RAM 占用与提交余量",
                 format!(
-                    "内存占用 {:.0}%，已接近容量上限；请检查进程并按需整理。",
+                    "RAM 占用率 {:.0}%；占用率不等同于提交量压力。请先核对可用物理内存与系统提交余量，再按需检查进程。",
                     diag.mem_pct
                 ),
                 "processes",
@@ -81,9 +81,9 @@ pub fn recommend_from_snapshots(
             }) {
                 out.push(suggestion(
                     "memory-pressure",
-                    "检查快速升高的内存压力",
+                    "检查快速上升的 RAM 占用率",
                     format!(
-                        "内存占用 {:.0}%，近 45 秒稳健趋势若延续，约 {eta_secs} 秒接近 90%；请检查进程。",
+                        "RAM 占用率 {:.0}%，近 45 秒稳健趋势若延续，约 {eta_secs} 秒接近 90%；请同时核对可用物理内存与系统提交余量。",
                         diag.mem_pct
                     ),
                     "processes",
@@ -92,34 +92,15 @@ pub fn recommend_from_snapshots(
             } else {
                 out.push(suggestion(
                     "memory-pressure",
-                    "检查持续上涨的内存占用",
+                    "检查持续上涨的 RAM 占用率",
                     format!(
-                        "内存占用 {:.0}%，近 45 秒每秒增长约 {:.2} 个百分点；请检查进程。",
+                        "RAM 占用率 {:.0}%，近 45 秒每秒增长约 {:.2} 个百分点；请同时核对可用物理内存与系统提交余量。",
                         diag.mem_pct, diag.mem_slope
                     ),
                     "processes",
                     78,
                 ));
             }
-        }
-    }
-
-    // Swap pressure can reveal sustained memory pressure despite moderate RAM percentage.
-    if stats.swap_total_gb.is_finite()
-        && stats.swap_used_gb.is_finite()
-        && stats.swap_total_gb > 0.0
-        && stats.swap_used_gb >= 0.0
-        && stats.swap_used_gb <= stats.swap_total_gb
-    {
-        let used_pct = stats.swap_used_gb / stats.swap_total_gb * 100.0;
-        if stats.swap_used_gb >= 2.0 && used_pct >= 80.0 {
-            out.push(suggestion(
-                "pagefile-pressure",
-                "检查页面文件与内存占用",
-                format!("页面文件已使用 {:.1}/{:.1} GB（{:.0}%）；可查看内存占用较高的应用并确认系统盘留有空间。", stats.swap_used_gb, stats.swap_total_gb, used_pct),
-                "processes",
-                if used_pct >= 95.0 { 88 } else { 74 },
-            ));
         }
     }
 
@@ -481,10 +462,10 @@ mod tests {
         diag.mem_slope_ready = false;
         assert!(recommend_from_snapshots(&stats, &diag, "C:").is_empty());
         diag.mem_pct = 90.0;
-        assert_eq!(
-            recommend_from_snapshots(&stats, &diag, "C:")[0].priority,
-            90
-        );
+        let recommendation = recommend_from_snapshots(&stats, &diag, "C:").remove(0);
+        assert_eq!(recommendation.priority, 90);
+        assert!(recommendation.reason.contains("RAM 占用率"));
+        assert!(recommendation.reason.contains("可用物理内存与系统提交余量"));
         diag.mem_pct = f32::NAN;
         assert!(recommend_from_snapshots(&stats, &diag, "C:").is_empty());
     }
@@ -589,53 +570,6 @@ mod tests {
         stats.battery.as_mut().unwrap().ac_online = false;
         stats.battery.as_mut().unwrap().percent = None;
         assert!(recommend_from_snapshots(&stats, &Diagnostics::default(), "C:").is_empty());
-    }
-
-    #[test]
-    fn pagefile_pressure_requires_valid_capacity_and_both_thresholds() {
-        let stats = Stats {
-            swap_used_gb: 4.8,
-            swap_total_gb: 6.0,
-            ..Default::default()
-        };
-        let items = recommend_from_snapshots(&stats, &Diagnostics::default(), "C:");
-        assert_eq!(items[0].id, "pagefile-pressure");
-        assert_eq!(items[0].priority, 74);
-        assert!(items[0].reason.contains("80%"));
-
-        let stats = Stats {
-            swap_used_gb: 5.8,
-            swap_total_gb: 6.0,
-            ..Default::default()
-        };
-        assert_eq!(
-            recommend_from_snapshots(&stats, &Diagnostics::default(), "C:")[0].priority,
-            88
-        );
-        for stats in [
-            Stats {
-                swap_used_gb: 1.9,
-                swap_total_gb: 2.0,
-                ..Default::default()
-            },
-            Stats {
-                swap_used_gb: 8.0,
-                swap_total_gb: 6.0,
-                ..Default::default()
-            },
-            Stats {
-                swap_used_gb: 3.0,
-                swap_total_gb: 0.0,
-                ..Default::default()
-            },
-            Stats {
-                swap_used_gb: f64::NAN,
-                swap_total_gb: 6.0,
-                ..Default::default()
-            },
-        ] {
-            assert!(recommend_from_snapshots(&stats, &Diagnostics::default(), "C:").is_empty());
-        }
     }
 
     #[test]
@@ -789,8 +723,6 @@ mod tests {
             ..Default::default()
         };
         let stats = Stats {
-            swap_used_gb: 5.8,
-            swap_total_gb: 6.0,
             battery: stats.battery.clone(),
             disks: stats.disks.clone(),
             ..Default::default()
@@ -798,12 +730,7 @@ mod tests {
         let items = recommend_from_snapshots(&stats, &diag, "C:");
         assert_eq!(
             items.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            vec![
-                "battery-low",
-                "system-disk-low",
-                "memory-pressure",
-                "pagefile-pressure"
-            ]
+            vec!["battery-low", "system-disk-low", "memory-pressure"]
         );
     }
 }

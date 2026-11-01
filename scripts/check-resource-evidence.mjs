@@ -11,7 +11,9 @@ assert.equal(validCapacityPair(1, Number.NaN), false, "non-finite capacity is in
 
 const symptomGuide = fs.readFileSync("src/components/SymptomGuide.tsx", "utf8");
 assert.match(symptomGuide, /validCapacityPair\(stats\.mem_used_gb, stats\.mem_total_gb\)/);
-assert.match(symptomGuide, /validCapacityPair\(stats\.swap_used_gb, stats\.swap_total_gb\)/);
+assert.match(symptomGuide, /diagnostics\?\.memory_available_physical_mb/);
+assert.match(symptomGuide, /diagnostics\?\.memory_commit_used_mb/);
+assert.match(symptomGuide, /diagnostics\?\.memory_commit_limit_mb/);
 const statsHook = fs.readFileSync("src/hooks/useStats.ts", "utf8");
 assert.match(statsHook, /if \(!sample\.sample_id \|\| !sample\.per_core\?\.length\)/, "valid non-memory telemetry is accepted when RAM capacity is missing");
 assert.match(statsHook, /validCapacityPair\(sample\.mem_used_gb, sample\.mem_total_gb\)/, "invalid RAM is not inserted into usage history");
@@ -23,7 +25,7 @@ const sidebar = fs.readFileSync("src/components/Sidebar.tsx", "utf8");
 assert.match(sidebar, /validCapacityPair\(stats\.mem_used_gb, stats\.mem_total_gb\)/);
 assert.match(sidebar, /aria-label="实时内存系统已用量与总量"/);
 assert.match(sidebar, /已用 \/ 总量/, "persistent sidebar labels the numerator and denominator");
-assert.match(symptomGuide, /系统报告内存已用[\s\S]*已用 \$\{memoryStats\.mem_used_gb\.toFixed\(1\)\} \/ 总量/, "memory diagnosis uses explicit system-used labels");
+assert.match(symptomGuide, /系统报告 RAM 已用[\s\S]*已用 \$\{memoryStats\.mem_used_gb\.toFixed\(1\)\} \/ 总量/, "memory diagnosis uses explicit system-used labels");
 const gameMode = fs.readFileSync("src/pages/GameMode.tsx", "utf8");
 const devMode = fs.readFileSync("src/pages/DevMode.tsx", "utf8");
 assert.match(gameMode, /系统已用[\s\S]*mem_used_gb\.toFixed\(1\)\} \/ \$\{stats\.mem_total_gb\.toFixed\(0\)\} GB/, "game mode labels the system-used RAM figure");
@@ -111,4 +113,4 @@ assert.deepEqual(disk.slice(0, 3).map((row) => row.label), [
 ]);
 assert.match(disk[0].value, /剩余 10\.0 GB/);
 
-console.log("Resource evidence passed: valid memory/swap capacities, baseline warm-up, GPU telemetry, and system-volume priority");
+console.log("Resource evidence passed: valid RAM capacity, commit-memory telemetry, baseline warm-up, GPU telemetry, and system-volume priority");

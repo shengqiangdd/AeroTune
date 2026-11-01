@@ -108,7 +108,6 @@ function fmtAnomaly(a: { kind: string; value: number; baseline: number; robust_z
 function recommendationIcon(id: string) {
   if (id.startsWith("gpu-temperature")) return "🌡";
   if (id.startsWith("gpu-memory")) return "🎮";
-  if (id === "pagefile-pressure") return "🧠";
   return "💡";
 }
 

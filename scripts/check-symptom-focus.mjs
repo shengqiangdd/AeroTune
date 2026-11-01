@@ -12,7 +12,7 @@ assert.equal(symptomForRecommendation("process-102-mem"), "memory");
 assert.equal(symptomForRecommendation("gpu-temperature-high"), "gpu");
 assert.equal(symptomForRecommendation("gpu-memory-pressure"), "gpu");
 assert.equal(symptomForRecommendation("process-103-io"), "io");
-assert.equal(symptomForRecommendation("pagefile-pressure"), "memory");
+assert.equal(symptomForRecommendation("pagefile-pressure"), null, "unverified sysinfo swap ratios no longer produce pagefile-pressure recommendations");
 assert.equal(symptomForRecommendation("startup-burden"), "startup");
 assert.equal(symptomForRecommendation("battery-low"), "battery");
 assert.equal(symptomForRecommendation("system-disk-low"), "disk");

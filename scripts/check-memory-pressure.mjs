@@ -11,6 +11,14 @@ const autoSource = readFileSync(new URL("../src-tauri/src/auto.rs", import.meta.
 const processUiSource = readFileSync(new URL("../src/pages/Processes.tsx", import.meta.url), "utf8");
 const autoEngineSource = readFileSync(new URL("../src/pages/AutoEngine.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+const recommendationSource = readFileSync(new URL("../src-tauri/src/recommendations.rs", import.meta.url), "utf8");
+assert.match(statsSource, /fn current_memory_pressure_readout\(\)[\s\S]*?K32GetPerformanceInfo/);
+assert.match(statsSource, /memory_pressure_readout_from_pages\([\s\S]*?physical_available_pages > physical_total_pages[\s\S]*?commit_total_pages > commit_limit_pages[\s\S]*?page_size_bytes == 0/);
+assert.match(statsSource, /pub\(crate\) fn attach_memory_pressure_readout[\s\S]*?memory_commit_headroom_mb/);
+assert.match(statsSource, /refresh_memory_specifics\(MemoryRefreshKind::nothing\(\)\.with_ram\(\)\)/);
+assert.doesNotMatch(statsSource, /sys\.refresh_memory_specifics\([^\n]*with_swap/);
+assert.doesNotMatch(recommendationSource, /pagefile-pressure/);
+assert.doesNotMatch(diagSource, /已使用交换分区/);
 const trimMemory = processSource.match(/pub fn trim_memory_sync\(\)[\s\S]*?\n}/)?.[0];
 assert.ok(trimMemory, "legacy trim IPC must remain present");
 assert.match(trimMemory, /optimize_process_memory_sync\(false, None\)/, "manual trim should reuse its already-safe single scan");
@@ -213,54 +221,54 @@ function expectStatus(input, label, tone, percentValid, percent = Number.NaN, et
 expectStatus(null, "正在建立基线", "muted", false);
 expectStatus(diagnostic({ score: 0 }), "正在建立基线", "muted", false);
 for (const invalid of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, -0.1, 100.1]) {
-  expectStatus(diagnostic({ mem_pct: invalid }), "内存水位数据不可用", "muted", false);
+  expectStatus(diagnostic({ mem_pct: invalid }), "RAM 占用率数据不可用", "muted", false);
 }
-expectStatus(diagnostic({ mem_pct: 77.99 }), "余量充足", "good", true, 77.99);
+expectStatus(diagnostic({ mem_pct: 77.99 }), "RAM 占用率低于预警线", "good", true, 77.99);
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: false, mem_slope: 0, mem_slope_sample_count: 6 }),
-  "内存趋势实测读数积累中（6/10）",
+  "RAM 占用率偏高；趋势采样中（6/10）",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: false, mem_slope_sample_count: -2 }),
-  "内存趋势实测读数积累中（0/10）",
+  "RAM 占用率偏高；趋势采样中（0/10）",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: false, mem_slope_sample_count: 17 }),
-  "内存趋势就绪状态待同步（17 个有效实测读数）",
+  "RAM 占用率偏高；趋势状态待同步（17 个有效实测读数）",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: false, mem_slope_sample_count: 100 }),
-  `内存趋势就绪状态待同步（${MEMORY_SLOPE_WINDOW} 个有效实测读数）`,
+  `RAM 占用率偏高；趋势状态待同步（${MEMORY_SLOPE_WINDOW} 个有效实测读数）`,
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: false, mem_slope_sample_count: undefined }),
-  "内存趋势实测读数积累中（0/10）",
+  "RAM 占用率偏高；趋势采样中（0/10）",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: true, mem_slope: 0.0501 }),
-  "持续上升，正在关注",
+  "RAM 占用率持续上升；核对可用量",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 84, mem_slope_ready: true, mem_slope: 0.06, mem_slope_sample_count: MEMORY_FORECAST_MIN_SAMPLES, mem_critical_eta_secs: 100 }),
-  "持续上升，正在关注",
+  "RAM 占用率持续上升；核对可用量",
   "warning",
   true,
   84,
@@ -268,7 +276,7 @@ expectStatus(
 );
 expectStatus(
   diagnostic({ mem_pct: 84, mem_slope_ready: true, mem_slope: 0.06, mem_slope_sample_count: MEMORY_FORECAST_MIN_SAMPLES - 1, mem_critical_eta_secs: 100 }),
-  "持续上升，正在关注",
+  "RAM 占用率持续上升；核对可用量",
   "warning",
   true,
   84,
@@ -276,7 +284,7 @@ expectStatus(
 for (const invalidEta of [0, -1, MEMORY_FORECAST_MAX_SECONDS + 1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
   expectStatus(
     diagnostic({ mem_pct: 84, mem_slope_ready: true, mem_slope: 0.06, mem_slope_sample_count: MEMORY_FORECAST_MIN_SAMPLES, mem_critical_eta_secs: invalidEta }),
-    "持续上升，正在关注",
+    "RAM 占用率持续上升；核对可用量",
     "warning",
     true,
     84,
@@ -284,28 +292,28 @@ for (const invalidEta of [0, -1, MEMORY_FORECAST_MAX_SECONDS + 1, 1.5, Number.Na
 }
 expectStatus(
   diagnostic({ mem_pct: 84, mem_slope_ready: true, mem_slope: MEMORY_RISING_SLOPE_THRESHOLD, mem_critical_eta_secs: 60 }),
-  "偏高但趋势平稳",
+  "RAM 占用率偏高但趋势平稳",
   "warning",
   true,
   84,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: true, mem_slope: 0.05 }),
-  "偏高但趋势平稳",
+  "RAM 占用率偏高但趋势平稳",
   "warning",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 78, mem_slope_ready: true, mem_slope: Number.NaN }),
-  "内存趋势数据不可用",
+  "RAM 占用趋势数据不可用",
   "muted",
   true,
   78,
 );
 expectStatus(
   diagnostic({ mem_pct: 90, mem_slope_ready: false, mem_slope: Number.NaN }),
-  "压力偏高，建议查看进程",
+  "RAM 占用率高；核对可用量与提交量",
   "warning",
   true,
   90,
