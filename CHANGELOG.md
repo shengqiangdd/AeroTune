@@ -2,6 +2,12 @@
 
 以下为从 README 迁移的详细开发与版本记录；保留原有日期、措辞和验证范围。带日期的开发记录本身不代表对应版本已经正式发布。原 README 未覆盖当前清单中的每个版本，因此没有补造缺失版本记录。
 
+## v1.5.11 — GitHub Releases 应用内更新验收（early access）
+
+- 以已公开的 v1.5.10 引导版为起点，计划验收标准 Settings→Rust IPC→有界下载→Minisign/版本/NSIS ZIP 校验→per-machine NSIS 更新路径。
+- 发行工作流通过受保护环境签名；当前 bounded updater 所需的单文件 NSIS ZIP 使用 Tauri `v1Compatible` overlay。普通 Cargo/Tauri 配置仍默认关闭更新。
+- 本版本仅代表 early-access 更新测试候选；真实 GitHub 更新及 UAC/重启结果将在实际验收后记录。取消、并发、安装中断和修复仍未验证。
+
 ## v1.5.10 — 标准 Tauri + GitHub Releases 更新路径（early access）
 
 - 将更新设计收敛为 Tauri 官方 Minisign 更新包与 GitHub Releases `latest.json`；保留 HTTPS/固定仓库地址、签名版本绑定、限制大小的下载与 ZIP/PE 校验，并由用户单独确认安装。

@@ -26,8 +26,8 @@ AeroTune 是一款基于 **Rust、Tauri 2 和 React** 的 Windows 桌面系统�
 ## 下载与更新状态
 
 - Windows x64 NSIS 安装包采用 per-machine 安装方式，安装到受保护的 Program Files，安装需要管理员权限。
-- 当前工作区配置版本为 **1.5.10**。Windows 安装包尚无 Authenticode 签名；Tauri Minisign 更新签名不等于发布者身份，UAC 可能显示 Unknown publisher。详见 [Windows Code Signing Policy](docs/WINDOWS_CODE_SIGNING.md)。
-- 标准 Tauri + GitHub Releases 更新路径已接入。已配置受保护环境中的生产 Minisign 密钥；用户授权 early-access 发布流程：先发布并手动安装 v1.5.10 引导版，再通过应用内 GitHub 更新安装 v1.5.11。实际应用 IPC/有界下载器的 loopback .3→.4 验收已完成；线上 GitHub redirect/proxy 及取消/中断/并发/修复仍待验证。尚无公开 tag 或 Release。详见[更新设计](docs/UPDATER.md)和[发布阻塞项](docs/UPDATER_RELEASE_BLOCKERS.md)。
+- 当前工作区配置版本为 **1.5.11**。Windows 安装包尚无 Authenticode 签名；Tauri Minisign 更新签名不等于发布者身份，UAC 可能显示 Unknown publisher。详见 [Windows Code Signing Policy](docs/WINDOWS_CODE_SIGNING.md)。
+- v1.5.10 引导版已于 2026-11-01 在 [GitHub Releases](https://github.com/shengqiangdd/AeroTune/releases/tag/v1.5.10) 公开，并从经 Minisign 验证的 NSIS ZIP 安装；Program Files 可执行文件与卸载注册表均报告 1.5.10。当前正准备从该安装实例验收 v1.5.11 应用内更新。当前 updater 不记录每一跳 redirect；WinHTTP 直连、WinINet 代理关闭已记录，应用内更新结果待验证。取消/中断/并发/修复仍未验证，因此不代表通用 GA。详见[更新设计](docs/UPDATER.md)和[发布阻塞项](docs/UPDATER_RELEASE_BLOCKERS.md)。
 
 ## 开发
 

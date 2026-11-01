@@ -2,7 +2,7 @@
   "name": "aerotune",
   "license": "MIT",
   "private": true,
-  "version": "1.5.10",
+  "version": "1.5.11",
   "packageManager": "pnpm@11.8.0",
   "type": "module",
   "scripts": {

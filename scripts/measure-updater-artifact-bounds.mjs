@@ -101,7 +101,7 @@ if (compressedEntryBytes > compressedCap) fail(`compressed entry size ${compress
 
 const digest = createHash("sha256").update(bytes).digest("hex");
 const releaseBlockers = readFileSync("docs/UPDATER_RELEASE_BLOCKERS.md", "utf8");
-assert.match(releaseBlockers, /artifact-specific measurements and limits have not been reviewed against a signed Windows release/);
+assert.match(releaseBlockers, /<!-- public-signed-release-measurement-reviewed -->/);
 console.log(JSON.stringify({
   artifact: artifactPath,
   artifactBytes: metadata.size,

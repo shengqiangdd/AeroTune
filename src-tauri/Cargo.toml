@@ -1,6 +1,6 @@
 [package]
 name = "aerotune"
-version = "1.5.10"
+version = "1.5.11"
 description = "AeroTune — Windows 系统优化中枢"
 license = "MIT"
 edition = "2021"
