@@ -25,8 +25,8 @@ import { toastOk, toastErr, toast } from "../lib/toast";
 import { fmtTime } from "../lib/format";
 import { buildChangeJournalCsv, buildChangeJournalJson, filterChanges, getChangeCategory, getChangeRevertTarget, summarizeUndoTargets } from "../lib/changeJournal.js";
 import type { ChangeCategoryFilter, ChangeReversibilityFilter } from "../lib/changeJournal.js";
-import { clearLocalObservationHistory, LOCAL_OBSERVATION_HISTORY_TARGETS } from "../lib/localObservationHistory.js";
-import type { LocalObservationHistoryId, LocalObservationHistoryResult } from "../lib/localObservationHistory.js";
+import { clearLocalObservationHistory, inspectLocalObservationHistory, LOCAL_OBSERVATION_HISTORY_TARGETS } from "../lib/localObservationHistory.js";
+import type { LocalObservationHistoryId, LocalObservationHistoryInventoryItem, LocalObservationHistoryResult } from "../lib/localObservationHistory.js";
 
 type SettingsProps = {
   admin: boolean;
@@ -48,6 +48,8 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
   const [info, setInfo] = useState<SysInfo | null>(null);
   const [infoStatus, setInfoStatus] = useState<"loading" | "ready" | "error">("loading");
   const [localHistoryResults, setLocalHistoryResults] = useState<LocalObservationHistoryResult[] | null>(null);
+  const [localHistoryInventory, setLocalHistoryInventory] = useState<LocalObservationHistoryInventoryItem[]>(() => inspectLocalObservationHistory());
+  const [selectedLocalHistoryIds, setSelectedLocalHistoryIds] = useState<LocalObservationHistoryId[]>([]);
   const localHistoryCleanupPending = useRef(false);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
@@ -253,12 +255,12 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
     const previousResults = localHistoryResults ?? [];
     const targetIds: LocalObservationHistoryId[] = retryFailed
       ? previousResults.filter((result) => !result.ok).map((result) => result.id)
-      : LOCAL_OBSERVATION_HISTORY_TARGETS.map((target) => target.id);
+      : LOCAL_OBSERVATION_HISTORY_TARGETS.filter((target) => selectedLocalHistoryIds.includes(target.id)).map((target) => target.id);
     if (targetIds.length === 0) return;
     if (!retryFailed) {
       const labels = targetIds.map((id) => LOCAL_OBSERVATION_HISTORY_TARGETS.find((target) => target.id === id)?.label ?? id);
       const confirmed = window.confirm(
-        `只尝试删除 AeroTune WebView localStorage 中以下 ${labels.length} 类历史：\n${labels.join("\n")}\n\n不会删除设置、变更日志/撤销快照、启动或计划恢复备份、日志及其他 %APPDATA% 文件；快速导航记录和可恢复的实验会话草稿也会保留。删除不可撤销，确认继续？`,
+        `只尝试删除你选择的 AeroTune WebView localStorage 观察历史：\n${labels.join("\n")}\n\n不会删除设置、变更日志/撤销快照、启动或计划恢复备份、应用日志及其他 %APPDATA% 文件；快速导航记录和可恢复的实验会话草稿也会保留。此处只检查所列键是否存在，不读取或展示记录内容。删除不可撤销，确认继续？`,
       );
       if (!confirmed) return;
     }
@@ -284,11 +286,13 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
       return result ? [result] : [];
     });
     setLocalHistoryResults(results);
+    setSelectedLocalHistoryIds(results.filter((result) => !result.ok).map((result) => result.id));
+    setLocalHistoryInventory(inspectLocalObservationHistory());
     const failed = results.filter((result) => !result.ok);
     if (failed.length) {
       toastErr(`仍有 ${failed.length} 类本机历史未能清除；失败项已保留，可单独重试。`);
     } else {
-      toastOk(retryFailed ? "未完成的本机历史清理已重试成功" : "已处理所列本机历史；不存在的记录安全忽略");
+      toastOk(retryFailed ? "未完成的本机历史清理已重试成功" : "已处理所选本机历史；不存在的记录安全忽略");
     }
   };
 
@@ -581,15 +585,49 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
           <div className="mt-3 rounded-lg border border-white/8 bg-white/3 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="text-[12px] font-medium text-slate-200">清除所列本机观察历史</div>
-                <p className="mt-1 text-[11px] leading-5 text-slate-400">
-                  只对以下 5 个 WebView localStorage 历史键调用删除：{LOCAL_OBSERVATION_HISTORY_TARGETS.map((target) => target.label).join("、")}。不会清除设置、撤销日志/快照、启动或计划恢复备份、应用日志、快速导航记录或可恢复的实验会话草稿；这不是全部数据清除，也不承诺底层介质安全擦除。清除进程历史会同时把其采样开关恢复为默认关闭；继续使用相应功能后，部分历史可能重新生成。
+                <div className="text-[12px] font-medium text-slate-200">选择性清除本机观察历史</div>
+                <p id="local-history-cleanup-help" className="mt-1 text-[11px] leading-5 text-slate-400">
+                  默认不选任何类别。下方状态只检查指定 WebView localStorage 键是否存在，不读取或展示历史内容。清理只作用于勾选项；不会删除设置、撤销日志/快照、启动或计划恢复备份、应用日志、快速导航记录或可恢复的实验会话草稿，也不承诺底层介质安全擦除。清除进程历史会同时把其采样开关恢复为默认关闭；继续使用相应功能后，部分历史可能重新生成。
                 </p>
               </div>
-              <Btn variant="danger" onClick={() => runLocalHistoryCleanup()}>
-                <Trash2 size={13} /> 清除所列历史
-              </Btn>
+              <div className="flex flex-wrap gap-2">
+                <Btn variant="ghost" onClick={() => { setLocalHistoryResults(null); setLocalHistoryInventory(inspectLocalObservationHistory()); }}>刷新状态</Btn>
+                <Btn variant="danger" disabled={!selectedLocalHistoryIds.length} onClick={() => runLocalHistoryCleanup()}>
+                  <Trash2 size={13} /> 清除所选历史（{selectedLocalHistoryIds.length}）
+                </Btn>
+              </div>
             </div>
+            <fieldset aria-describedby="local-history-cleanup-help" className="mt-3 space-y-2">
+              <legend className="mb-2 text-[11px] font-medium text-slate-300">选择要清除的类别</legend>
+              {LOCAL_OBSERVATION_HISTORY_TARGETS.map((target) => {
+                const state = localHistoryInventory.find((item) => item.id === target.id)?.state ?? "unknown";
+                const stateLabel = state === "present" ? "键存在" : state === "absent" ? "无此键" : "无法读取";
+                return (
+                  <label key={target.id} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md border border-white/6 bg-black/10 px-2.5 py-2 hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      checked={selectedLocalHistoryIds.includes(target.id)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setLocalHistoryResults(null);
+                        setSelectedLocalHistoryIds((current) => {
+                          if (checked) return current.includes(target.id) ? current : [...current, target.id];
+                          return current.filter((id) => id !== target.id);
+                        });
+                      }}
+                      className="mt-0.5 shrink-0 accent-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
+                      aria-labelledby={`local-history-${target.id}-label`}
+                      aria-describedby={`local-history-${target.id}-detail local-history-${target.id}-state`}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span id={`local-history-${target.id}-label`} className="block text-[11px] font-medium text-slate-200">{target.label}</span>
+                      <span id={`local-history-${target.id}-detail`} className="mt-0.5 block break-words text-[10px] leading-4 text-slate-500">{target.detail}</span>
+                    </span>
+                    <span id={`local-history-${target.id}-state`} className={`shrink-0 text-[10px] ${state === "present" ? "text-cyan-200" : state === "absent" ? "text-slate-500" : "text-amber-200"}`}>{stateLabel}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
             {localHistoryResults && localHistoryResults.some((result) => !result.ok) && (
               <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300/20 bg-amber-300/5 px-3 py-2 text-[11px] leading-5 text-amber-100">
                 <span className="min-w-0 flex-1 break-words">
@@ -600,7 +638,7 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
             )}
             {localHistoryResults && localHistoryResults.length > 0 && localHistoryResults.every((result) => result.ok) && (
               <div role="status" className="mt-3 text-[11px] leading-5 text-emerald-200">
-                已对 {localHistoryResults.length} 项发出本机 WebView 存储删除请求，且 API 未报告失败；不存在的键也安全忽略。此结果不等同于底层介质安全擦除。
+                已对 {localHistoryResults.length} 个所选类别发出本机 WebView 存储删除请求，且 API 未报告失败；不存在的键也安全忽略。此结果不等同于底层介质安全擦除。
               </div>
             )}
           </div>
