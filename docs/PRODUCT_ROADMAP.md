@@ -2,6 +2,14 @@
 
 目标是可解释、可验证、可恢复的本机维护，不以开关数量或“提速百分比”为目标。
 
+## 性能、内存与可用性（当前优先）
+
+把“Windows 更快/更稳”落到可复测的数据，不把高 RAM 占用、单次分数或注册表开关直接当作优化效果。先保持低成本系统采样与慢速进程清单分离；记录冷启动/稳态扫描的耗时和数据新鲜度，再决定是否调整频率。内存策略优先区分可用物理内存与系统提交量；不因 RAM 使用率高就自动清理工作集。慢速传感器或诊断故障不得阻塞核心采样。
+
+本阶段将 Optimization Lab 只显示整秒的倒计时从 250ms 改为 1s，减少 75% 无效计时唤醒；采样窗口和性能指标采集频率不变。下一步先测大量进程下的冷/稳态 `list_processes` P50/P95，再评估是否优化重采样；PID 创建时间校验和快照新鲜度保护不得因提速而移除。
+
+算法参考：[windows_exporter 进程采集器](https://github.com/prometheus-community/windows_exporter/blob/main/docs/collector.process.md)的一次清单查询与稳定元数据缓存、[psutil 进程 API](https://github.com/giampaolo/psutil/blob/main/docs/api.rst)的合并读取/对象复用思路，以及 Microsoft 对[性能计数器采样频率](https://learn.microsoft.com/en-us/windows/win32/perfctrs/about-performance-counters)和[系统提交量查询](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getperformanceinfo)的文档。仅借鉴测量和采集模式，不将其他工具中的 tweak 当作效果证据。
+
 ## 当前实现中的优先改进
 
 - 恢复确认：单条、组、全部恢复和清空日志均核对确认快照；失配要求刷新。内部事务补偿不使用用户确认入口。保护针对进程内日志锁，不承诺阻止外部进程直接改写文件。

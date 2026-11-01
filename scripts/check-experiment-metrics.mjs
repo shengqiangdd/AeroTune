@@ -77,6 +77,13 @@ assert.match(lab, /coverage: analyzerCoverage\(record\.after\)/);
 assert.match(lab, /hasTrustworthyExperimentCoverage\(baselineSummary\)/);
 assert.match(lab, /hasTrustworthyExperimentCoverage\(afterSummary\)/);
 assert.match(lab, /statsStatus !== "live"/);
+assert.match(lab, /const COUNTDOWN_REFRESH_MS = 1000/);
+const countdownEffect = lab.match(/useEffect\(\(\) => \{\s*if \(!session \|\| \(session\.phase !== "baseline" && session\.phase !== "after"\)\) return;[\s\S]*?\n  \}, \[session\?\.phase, saveRecord, setActiveSession, interruptSession\]\);/)?.[0];
+assert.ok(countdownEffect, "experiment countdown effect must remain present");
+assert.match(countdownEffect, /window\.setInterval\([\s\S]*?COUNTDOWN_REFRESH_MS\)/);
+assert.match(countdownEffect, /Math\.ceil\(\(endAt - now\) \/ 1000\)/);
+assert.match(countdownEffect, /if \(now < endAt\) return;/, "phase transition remains tied to the exact window deadline");
+assert.doesNotMatch(countdownEffect, /250/, "whole-second countdown must not poll four times per second");
 assert.match(rust, /MIN_WINDOW_COVERAGE:\s*f64\s*=\s*0\.7/);
 
 console.log("Experiment metrics passed: bounded telemetry, fractional window coverage, and sparse-window rejection");

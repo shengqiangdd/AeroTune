@@ -21,6 +21,7 @@ import type { ExperimentMetricSample } from "../lib/experimentMetrics.js";
 import { Btn, Card, Chip, PageHead } from "./ui";
 
 const WINDOW_MS = 60_000;
+const COUNTDOWN_REFRESH_MS = 1000;
 const HISTORY_LIMIT = 8;
 const HISTORY_KEY = "aerotune.optimization-lab.history.v1";
 const DRAFT_KEY = "aerotune.optimization-lab.draft.v1";
@@ -650,6 +651,7 @@ export function OptimizationLab({ stats, statsStatus }: { stats: Stats | null; s
 
   useEffect(() => {
     if (!session || (session.phase !== "baseline" && session.phase !== "after")) return;
+    // The UI displays whole seconds; polling four times per second adds wakeups without useful precision.
     const timer = window.setInterval(() => {
       const current = sessionRef.current;
       if (!current || (current.phase !== "baseline" && current.phase !== "after")) return;
@@ -683,7 +685,7 @@ export function OptimizationLab({ stats, statsStatus }: { stats: Stats | null; s
       setActiveSession(null);
       setSecondsLeft(60);
       setNotice("两段窗口采集完成；历史中显示的是观测差异，不代表该模式造成了变化。");
-    }, 250);
+    }, COUNTDOWN_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [session?.phase, saveRecord, setActiveSession, interruptSession]);
 
