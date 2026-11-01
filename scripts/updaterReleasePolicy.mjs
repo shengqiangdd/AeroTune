@@ -204,7 +204,8 @@ export function hasConfiguredSigningKey(environment = {}) {
 }
 
 export function updaterIsEnabled(config) {
-  return config?.bundle?.createUpdaterArtifacts === true && Boolean(config?.plugins?.updater);
+  const artifactMode = config?.bundle?.createUpdaterArtifacts;
+  return (artifactMode === true || artifactMode === "v1Compatible") && Boolean(config?.plugins?.updater);
 }
 
 /**
@@ -376,6 +377,9 @@ export function validateUpdaterReleaseConfig(baseConfig, overlay, {
   }
 
   if (!updaterIsEnabled(overlay)) errors.push("Updater artifacts and plugins.updater must both be configured in the release overlay.");
+  if (overlay?.bundle?.createUpdaterArtifacts !== "v1Compatible") {
+    errors.push("The release overlay must use bundle.createUpdaterArtifacts=v1Compatible because the bounded NSIS updater consumes the signed ZIP archive.");
+  }
   if (!privateKeyPresent) errors.push("Configure exactly one non-placeholder TAURI_SIGNING_PRIVATE_KEY input (inline secret or a non-empty regular non-symlink file outside the repository) or a TAURI_SIGNING_PRIVATE_KEY_PATH file with those same file requirements; signed updater artifacts cannot be produced otherwise.");
   if (!githubUpdaterAcceptanceReady) {
     errors.push("The fixed GitHub updater remains fail-closed until bounded feed/artifact handling, host/redirect and system-proxy policy, and standard-user Windows UAC acceptance are approved in source contracts.");

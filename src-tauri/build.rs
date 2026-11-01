@@ -454,7 +454,9 @@ fn validate_updater_security(
 }
 
 fn updater_is_enabled(value: &Value) -> bool {
-    let artifacts = value.pointer("/bundle/createUpdaterArtifacts") == Some(&Value::Bool(true));
+    let artifact_mode = value.pointer("/bundle/createUpdaterArtifacts");
+    let artifacts = artifact_mode == Some(&Value::Bool(true))
+        || artifact_mode.and_then(Value::as_str) == Some("v1Compatible");
     let updater = value.pointer("/plugins/updater");
     let has_endpoints = updater
         .and_then(|config| config.get("endpoints"))

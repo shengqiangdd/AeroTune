@@ -43,6 +43,8 @@ assert.equal(baseConfig.productName, "AeroTune");
 assert.equal(baseConfig.identifier, "com.aerotune.desktop");
 assert.deepEqual(baseConfig.bundle.targets, ["nsis"]);
 assert.notEqual(baseConfig.bundle.createUpdaterArtifacts, true);
+assert.notEqual(baseConfig.bundle.createUpdaterArtifacts, "v1Compatible");
+assert.equal(overlay.bundle.createUpdaterArtifacts, "v1Compatible");
 assert.equal(baseConfig.bundle.windows.nsis.installMode, "perMachine");
 assert.equal(baseConfig.plugins.updater.endpoints.length, 0);
 assert.equal(baseConfig.plugins.updater.pubkey, "");
@@ -109,6 +111,10 @@ const validReleaseInputs = {
   capabilityFiles: capabilities,
 };
 assert.deepEqual(validateUpdaterReleaseConfig(baseConfig, overlay, validReleaseInputs).errors, []);
+assert.ok(validateUpdaterReleaseConfig(baseConfig, {
+  ...overlay,
+  bundle: { ...overlay.bundle, createUpdaterArtifacts: true },
+}, validReleaseInputs).errors.some((error) => error.includes("v1Compatible")));
 assert.ok(validateUpdaterReleaseConfig(baseConfig, overlay, {
   ...validReleaseInputs,
   githubUpdaterAcceptanceReady: false,
@@ -210,6 +216,8 @@ assert.match(buildGuard, /the ordinary app must register exactly one Tauri updat
 assert.match(buildGuard, /GITHUB_RELEASE_WINDOWS_ACCEPTED/);
 assert.match(buildGuard, /update\.install\(artifact\.bytes\(\)\)/);
 assert.match(buildGuard, /must keep plugins\.updater\.windows\.installMode set to passive so the per-machine installer can request UAC/);
+assert.match(buildGuard, /artifact_mode\.and_then\(Value::as_str\) == Some\("v1Compatible"\)/);
+assert.match(releasePolicy, /The release overlay must use bundle\.createUpdaterArtifacts=v1Compatible/);
 
 assert.match(readinessScript, /githubUpdaterAcceptanceReady/);
 assert.match(readinessScript, /GITHUB_RELEASE_WINDOWS_ACCEPTED/);

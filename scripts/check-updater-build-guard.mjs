@@ -165,6 +165,11 @@ const cases = [
     config: { bundle: { windows: { nsis: { installMode: "perMachine", customLanguageFiles: { English: "custom.nsh" } } } } },
     expected: "custom NSIS language source files",
   },
+  {
+    label: "v1Compatible updater artifacts in the ordinary Cargo config",
+    config: { bundle: { createUpdaterArtifacts: "v1Compatible" } },
+    expected: "TAURI_CONFIG must keep updater artifacts, feed, and public key disabled",
+  },
 ];
 
 const testDirectory = mkdtempSync(join(tmpdir(), "aerotune-updater-build-guard-"));
