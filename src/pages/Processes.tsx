@@ -8,7 +8,7 @@ import { mergeMemoryCandidateResults } from "../lib/memoryCandidateResults.js";
 import { aggregateMemoryOptimizationBatches } from "../lib/memoryOptimizationBatch.js";
 import { interactionLatencyBandFromP95, processRefreshIntervalMs } from "../lib/processRefreshPolicy";
 import { buildProcessTreeRows } from "../lib/processTreeRows";
-import { recordInteractionLatencySample } from "../lib/interactionLatencySampling";
+import { recordInteractionLatencySample, recordLatencyP95Sample } from "../lib/interactionLatencySampling";
 import { nearestRankPercentile } from "../lib/nearestRankPercentile";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Btn, PageHead, Chip, Card } from "../components/ui";
@@ -33,12 +33,12 @@ function recordLatencyMetricSample(
   totalSampleCount: { current: number },
   valueMs: number,
 ): { rollingSampleCount: number; p95Ms: number | null } | null {
-  const sampleUpdate = recordInteractionLatencySample(samples, valueMs, totalSampleCount.current);
+  const sampleUpdate = recordLatencyP95Sample(samples, valueMs, totalSampleCount.current);
   if (!sampleUpdate) return null;
   totalSampleCount.current = sampleUpdate.totalSampleCount;
   return {
     rollingSampleCount: sampleUpdate.rollingSampleCount,
-    p95Ms: sampleUpdate.shouldUpdateP95 ? nearestRankPercentile(samples, 0.95) : null,
+    p95Ms: sampleUpdate.p95Ms,
   };
 }
 

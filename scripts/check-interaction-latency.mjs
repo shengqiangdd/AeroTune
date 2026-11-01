@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { recordInteractionLatencySample } from "../src/lib/interactionLatencySampling.js";
+import { recordInteractionLatencySample, recordLatencyP95Sample } from "../src/lib/interactionLatencySampling.js";
 import { nearestRankPercentile } from "../src/lib/nearestRankPercentile.js";
 
 const cases = [
@@ -40,4 +40,25 @@ assert.deepEqual(rollingSamples, Array.from({ length: 31 }, (_, index) => index 
 assert.equal(recordInteractionLatencySample(rollingSamples, Number.NaN, totalSampleCount), null, "invalid measurements are ignored");
 assert.deepEqual(rollingSamples, Array.from({ length: 31 }, (_, index) => index + 5), "invalid measurements leave the window unchanged");
 
-console.log(`Interaction-latency nearest-rank P95 passed: ${cases.length + 7} checks`);
+const measuredP95Samples = [];
+let measuredP95TotalCount = 0;
+const measuredP95Readings = [];
+for (let value = 1; value <= 35; value += 1) {
+  const update = recordLatencyP95Sample(measuredP95Samples, value, measuredP95TotalCount);
+  assert.ok(update, `combined latency sample ${value} is accepted`);
+  measuredP95TotalCount = update.totalSampleCount;
+  if (update.p95Ms != null) {
+    measuredP95Readings.push([update.totalSampleCount, update.p95Ms, update.rollingSampleCount]);
+  }
+}
+assert.deepEqual(
+  measuredP95Readings,
+  [[5, 5, 5], [10, 10, 10], [15, 15, 15], [20, 19, 20], [25, 24, 25], [30, 29, 30], [31, 30, 31], [35, 34, 31]],
+  "combined sampler computes rolling nearest-rank P95 at five-sample cadence and sample 31",
+);
+assert.equal(measuredP95Samples.length, 31, "combined P95 sampler remains bounded");
+const measuredP95Snapshot = [...measuredP95Samples];
+assert.equal(recordLatencyP95Sample(measuredP95Samples, Number.NaN, measuredP95TotalCount), null, "combined sampler ignores invalid latency");
+assert.deepEqual(measuredP95Samples, measuredP95Snapshot, "invalid combined samples do not mutate the rolling window");
+
+console.log(`Interaction-latency nearest-rank P95 passed: ${cases.length + 11} checks`);

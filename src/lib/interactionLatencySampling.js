@@ -1,3 +1,5 @@
+import { nearestRankPercentile } from "./nearestRankPercentile.js";
+
 export const MAX_INTERACTION_LATENCY_SAMPLES = 31;
 export const INTERACTION_LATENCY_P95_UPDATE_INTERVAL = 5;
 
@@ -31,5 +33,20 @@ export function recordInteractionLatencySample(
     totalSampleCount: nextSampleCount,
     rollingSampleCount: samples.length,
     shouldUpdateP95: nextSampleCount % updateEvery === 0 || nextSampleCount === maxSamples,
+  };
+}
+
+export function recordLatencyP95Sample(
+  samples,
+  value,
+  totalSampleCount,
+  maxSamples = MAX_INTERACTION_LATENCY_SAMPLES,
+  updateEvery = INTERACTION_LATENCY_P95_UPDATE_INTERVAL,
+) {
+  const update = recordInteractionLatencySample(samples, value, totalSampleCount, maxSamples, updateEvery);
+  if (!update) return null;
+  return {
+    ...update,
+    p95Ms: update.shouldUpdateP95 ? nearestRankPercentile(samples, 0.95) : null,
   };
 }

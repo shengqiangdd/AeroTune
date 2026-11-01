@@ -4,6 +4,7 @@ const app = fs.readFileSync("src/App.tsx", "utf8");
 const dashboard = fs.readFileSync("src/pages/Dashboard.tsx", "utf8");
 const processes = fs.readFileSync("src/pages/Processes.tsx", "utf8");
 const processPolicy = fs.readFileSync("src/lib/processRefreshPolicy.js", "utf8");
+const latencySampling = fs.readFileSync("src/lib/interactionLatencySampling.js", "utf8");
 const reliability = fs.readFileSync("src/components/ReliabilityTimeline.tsx", "utf8");
 const powerInsights = fs.readFileSync("src/components/PowerInsights.tsx", "utf8");
 const powerEstimate = fs.readFileSync("src/lib/powerEstimate.js", "utf8");
@@ -154,6 +155,8 @@ const checks = [
       && /只有搜索\/排序 P95 在至少 20 个样本后偏高时才会延长自动刷新间隔/.test(processes)
       && /请求和渲染指标仅显示、不改变策略/.test(processes)
       && /requestStartedAt = measureSearchLatencyEnabled\.current \? performance\.now\(\) : null[\s\S]*?await api\.listProcesses\(\)[\s\S]*?processRequestLatencySamples\.current/.test(processes)
+      && /recordLatencyP95Sample\(samples, valueMs, totalSampleCount\.current\)/.test(processes)
+      && /export function recordLatencyP95Sample[\s\S]*?update\.shouldUpdateP95 \? nearestRankPercentile\(samples, 0\.95\) : null/.test(latencySampling)
       && /useLayoutEffect\(\(\) => \{[\s\S]*?pendingProcessRenderStartedAt\.current[\s\S]*?requestAnimationFrame[\s\S]*?processRenderLatencySamples\.current[\s\S]*?\}, \[list\]\)/.test(processes)
       && /cpuLoadBandFromUsage\(stats\?\.cpu, current\.cpu\)/.test(app)
       && /memoryLoadBandFromUsage\(stats\?\.mem_used_gb, stats\?\.mem_total_gb, current\.memory\)/.test(app)

@@ -7,6 +7,18 @@ export interface InteractionLatencySampleUpdate {
   shouldUpdateP95: boolean;
 }
 
+export interface LatencyP95SampleUpdate extends InteractionLatencySampleUpdate {
+  p95Ms: number | null;
+}
+
+export function recordLatencyP95Sample(
+  samples: number[],
+  value: number,
+  totalSampleCount: number,
+  maxSamples?: number,
+  updateEvery?: number,
+): LatencyP95SampleUpdate | null;
+
 export function recordInteractionLatencySample(
   samples: number[],
   value: number,
