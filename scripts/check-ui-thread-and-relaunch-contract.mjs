@@ -121,4 +121,10 @@ assert.match(
 assert.match(auto, /ad\.priority_write_retry_after = Some\(attempt \+ PRIORITY_WRITE_RETRY_BACKOFF\)/, "a failed write must arm the backoff");
 assert.match(auto, /ad\.priority_write_retry_after = None;/, "a successful write must clear the backoff");
 assert.match(auto, /failed_priority_write_is_not_retried_until_backoff_expires/);
-console.log("PASS slow commands stay off the UI thread; elevated relaunch waits for the old instance; journal paging is display-only; failed priority writes back off");
+// ---------------------------------------------------------------------------
+// 5. No machine-specific Cargo target path is committed (it breaks other clones and the CI default).
+// ---------------------------------------------------------------------------
+const cargoConfig = read("src-tauri/.cargo/config.toml");
+assert.doesNotMatch(cargoConfig, /^\s*target-dir\s*=/m, "do not commit a machine-specific target-dir");
+assert.doesNotMatch(cargoConfig, /[A-Za-z]:[\\/]/, "do not commit drive-specific paths");
+console.log("PASS slow commands stay off the UI thread; elevated relaunch waits for the old instance; journal paging is display-only; failed priority writes back off; no machine-specific Cargo path");
