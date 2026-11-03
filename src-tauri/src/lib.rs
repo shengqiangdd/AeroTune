@@ -6,6 +6,7 @@ mod defrag;
 mod diag;
 mod disk_analyzer;
 mod disk_trend;
+mod drivers;
 mod experiment_insight;
 mod gpu;
 mod journal;
@@ -277,6 +278,8 @@ pub fn run() {
             cleaner::remove_residual,
             cleaner::dism_component_cleanup,
             cleaner::dism_component_cleanup_reset,
+            drivers::list_stale_drivers,
+            drivers::delete_stale_driver,
             cleaner::scan_junk,
             cleaner::preview_junk,
             cleaner::clean_junk,

@@ -639,6 +639,23 @@ export interface HibernateInfo {
   enabled: boolean;
   size_gb: number;
 }
+export interface StaleDriver {
+  published: string;
+  original: string;
+  provider: string;
+  class_name: string;
+  version: string;
+  date: string;
+  superseded_by: string;
+  /** null = the package folder could not be measured; never treat it as 0. */
+  size_mb: number | null;
+}
+export interface StaleDriverReport {
+  drivers: StaleDriver[];
+  total_packages: number;
+  measured_mb: number;
+  unmeasured: number;
+}
 export interface WifiProfile {
   ssid: string;
   auth: string;
@@ -819,6 +836,8 @@ export const api = {
   getUpdatePause: () => invoke<boolean>("get_update_pause"),
 
   hibernateInfo: () => invoke<HibernateInfo>("hibernate_info"),
+  listStaleDrivers: () => invoke<StaleDriverReport>("list_stale_drivers"),
+  deleteStaleDriver: (published: string) => invoke<void>("delete_stale_driver", { published }),
   setHibernate: (on: boolean) => invoke<void>("set_hibernate", { on }),
 
   createRestorePoint: (desc: string) => invoke<string>("create_restore_point", { desc }),

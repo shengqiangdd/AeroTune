@@ -305,7 +305,7 @@ fn resolve_executable(program: &str) -> Result<PathBuf, String> {
         "takeown" | "takeown.exe" | "icacls" | "icacls.exe" | "cmd" | "cmd.exe" | "powercfg"
         | "powercfg.exe" | "ipconfig" | "ipconfig.exe" | "defrag" | "defrag.exe" | "schtasks"
         | "schtasks.exe" | "dism" | "dism.exe" | "compact" | "compact.exe" | "vssadmin"
-        | "vssadmin.exe" => windows_system_directory()?,
+        | "vssadmin.exe" | "pnputil" | "pnputil.exe" => windows_system_directory()?,
         _ => return Err(format!("拒绝通过 PATH 启动未审核的命令: {program}")),
     };
     let executable = match name.as_str() {
@@ -319,6 +319,7 @@ fn resolve_executable(program: &str) -> Result<PathBuf, String> {
         "dism" | "dism.exe" => "dism.exe",
         "compact" | "compact.exe" => "compact.exe",
         "vssadmin" | "vssadmin.exe" => "vssadmin.exe",
+        "pnputil" | "pnputil.exe" => "pnputil.exe",
         _ => unreachable!("only allowlisted system tools reach this branch"),
     };
     verify_system_executable(system_directory.join(executable))

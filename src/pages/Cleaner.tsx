@@ -9,6 +9,7 @@ import { Btn, PageHead, Card, Chip, Toggle } from "../components/ui";
 import { toastOk, toastErr, toast } from "../lib/toast";
 import { fmtFileSize } from "../lib/format";
 import { DuplicateFinderTab } from "../components/DuplicateFinderTab";
+import { StaleDriversCard } from "../components/StaleDriversCard";
 
 const CONF: Record<string, { label: string; tone: "green" | "amber" | "slate" }> = {
   high: { label: "高置信", tone: "green" },
@@ -588,6 +589,7 @@ function SystemTab() {
         <CompactOsCard />
         <MemCompCard />
         <AppxCard />
+        <StaleDriversCard />
       </div>
     </div>
   );
