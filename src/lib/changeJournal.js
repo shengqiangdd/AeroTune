@@ -3,6 +3,7 @@ const CATEGORY_LABELS = {
   power_plan: "电源",
   tcp: "TCP",
   dns: "DNS",
+  processormax: "电源",
 };
 
 const TCP_LEVELS = new Set(["disabled", "highlyrestricted", "restricted", "normal", "experimental"]);
@@ -128,6 +129,15 @@ function revertTargetDetails(change) {
       return {
         text: `TCP 自动调优恢复为 ${level.text}${valid ? "" : "（级别无效）"}`,
         complete: level.complete && valid,
+      };
+    }
+    case "processormax": {
+      const ac = revert.old_ac;
+      const dc = revert.old_dc;
+      const valid = Number.isInteger(ac) && ac >= 0 && ac <= 100 && Number.isInteger(dc) && dc >= 0 && dc <= 100 && GUID_PATTERN.test(String(revert.scheme ?? ""));
+      return {
+        text: valid ? `最大处理器状态恢复为 ${ac}%（交流）/ ${dc}%（电池）` : "最大处理器状态原值未知或无效",
+        complete: valid,
       };
     }
     case "epp": {

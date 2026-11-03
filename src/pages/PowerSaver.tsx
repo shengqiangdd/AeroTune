@@ -9,6 +9,7 @@ import { Card, Btn, Chip, PageHead, ModeBanner, Toggle } from "../components/ui"
 import { toastOk, toastErr } from "../lib/toast";
 import { PowerInsights } from "../components/PowerInsights";
 import { ScenarioPreviewCard } from "../components/ScenarioPreviewCard";
+import { ProcessorLimitCard } from "../components/ProcessorLimitCard";
 
 function fmtSecs(s: number | null): string {
   if (s == null) return "—";
@@ -176,6 +177,7 @@ export function PowerSaver({ stats, statsStatus }: { stats: Stats | null; statsS
         </div>
       )}
       <div className="mb-5"><ScenarioPreviewCard mode="power" /></div>
+      <div className="mb-5"><ProcessorLimitCard /></div>
 
       <div className="mb-5 grid grid-cols-1 gap-4 2xl:grid-cols-3">
         <Card className="min-w-0 2xl:col-span-2">

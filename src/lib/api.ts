@@ -178,6 +178,9 @@ export interface ChangeRevert {
   nic_guid?: string;
   applied_guid?: string | null;
   applied_level?: string | null;
+  scheme?: string;
+  old_ac?: number;
+  old_dc?: number;
 }
 export interface Change {
   id: number;
@@ -656,6 +659,15 @@ export interface StaleDriverReport {
   measured_mb: number;
   unmeasured: number;
 }
+export interface ProcessorState {
+  scheme: string;
+  /** null = the plan has no override (Windows default 100 applies). */
+  max_ac: number | null;
+  max_dc: number | null;
+  limited: boolean;
+  written_by_aerotune: string | null;
+  restorable_from_journal: boolean;
+}
 export interface WifiProfile {
   ssid: string;
   auth: string;
@@ -836,6 +848,8 @@ export const api = {
   getUpdatePause: () => invoke<boolean>("get_update_pause"),
 
   hibernateInfo: () => invoke<HibernateInfo>("hibernate_info"),
+  getProcessorState: () => invoke<ProcessorState>("get_processor_state"),
+  removeProcessorLimit: () => invoke<void>("remove_processor_limit"),
   listStaleDrivers: () => invoke<StaleDriverReport>("list_stale_drivers"),
   deleteStaleDriver: (published: string) => invoke<void>("delete_stale_driver", { published }),
   setHibernate: (on: boolean) => invoke<void>("set_hibernate", { on }),

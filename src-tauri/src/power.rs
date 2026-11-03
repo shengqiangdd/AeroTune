@@ -627,6 +627,124 @@ pub fn get_proc_max() -> Option<u32> {
         .ok()?;
     k.get_value::<u32, _>("ACSettingIndex").ok()
 }
+/// 某电源计划的最大处理器状态 (AC, DC)。计划没有覆盖值时对应项为 `None`（沿用 Windows 默认 100）。
+pub(crate) fn processor_max_pair(scheme: &str) -> Result<crate::journal::ProcessorMaxPair, String> {
+    if !is_valid_power_plan_guid(scheme) {
+        return Err("电源计划 GUID 不合法".into());
+    }
+    let path = format!(
+        r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{scheme}\{SUB_PROCESSOR}\{PROCTHROTTLEMAX}"
+    );
+    let key = match winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE).open_subkey(path) {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
+        Err(error) => return Err(format!("读取最大处理器状态失败：{error}")),
+    };
+    let read = |name: &str| -> Result<Option<u32>, String> {
+        match key.get_value::<u32, _>(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!("读取最大处理器状态失败：{error}")),
+        }
+    };
+    Ok((read("ACSettingIndex")?, read("DCSettingIndex")?))
+}
+
+/// 写入当前活动计划的最大处理器状态（AC 与 DC），使用 powercfg 官方接口并重新激活计划。
+pub(crate) fn set_processor_max_values(ac: u32, dc: u32) -> Result<(), String> {
+    if ac > 100 || dc > 100 {
+        return Err("最大处理器状态取值范围 0-100".into());
+    }
+    for (verb, value) in [("/setacvalueindex", ac), ("/setdcvalueindex", dc)] {
+        crate::util::run_checked(
+            "powercfg",
+            &[
+                verb,
+                "scheme_current",
+                "sub_processor",
+                "procthrottlemax",
+                &value.to_string(),
+            ],
+        )?;
+    }
+    crate::util::run_checked("powercfg", &["/setactive", "scheme_current"])
+}
+
+#[derive(Serialize, Clone)]
+pub struct ProcessorState {
+    pub scheme: String,
+    /// `None` = the plan has no override (Windows default of 100 applies).
+    pub max_ac: Option<u32>,
+    pub max_dc: Option<u32>,
+    /// True when either value is below 100, which keeps the CPU from using its turbo range.
+    pub limited: bool,
+    /// Description of the most recent journal entry that wrote a processor limit, if any.
+    pub written_by_aerotune: Option<String>,
+    /// Whether that write can be undone from the change journal.
+    pub restorable_from_journal: bool,
+}
+
+/// Reads the active plan's maximum processor state. Read only.
+#[tauri::command(async)]
+pub fn get_processor_state() -> Result<ProcessorState, String> {
+    let scheme = active_scheme_guid().ok_or("无法读取当前活动电源计划")?;
+    let (max_ac, max_dc) = processor_max_pair(&scheme)?;
+    let limited = max_ac.is_some_and(|v| v < 100) || max_dc.is_some_and(|v| v < 100);
+    let (written_by_aerotune, restorable_from_journal) = crate::journal::list_changes()
+        .map(|changes| {
+            changes
+                .iter()
+                .rev()
+                .find(|change| change.desc.contains("最大处理器状态"))
+                .map(|change| {
+                    (
+                        Some(change.desc.clone()),
+                        matches!(change.revert, crate::journal::Revert::ProcessorMax { .. }),
+                    )
+                })
+                .unwrap_or((None, false))
+        })
+        .unwrap_or((None, false));
+    Ok(ProcessorState {
+        scheme,
+        max_ac,
+        max_dc,
+        limited,
+        written_by_aerotune,
+        restorable_from_journal,
+    })
+}
+
+/// Sets the active plan's maximum processor state to 100 % (AC and DC), journaled and undoable.
+/// Raising the cap only lets Windows use the CPU's full range; it is not a forced clock speed.
+#[tauri::command(async)]
+pub fn remove_processor_limit() -> Result<(), String> {
+    let _operation_guard = crate::tweaks::lock_mode_operations();
+    if !crate::util::is_admin() {
+        return Err("修改电源计划需要管理员权限，请在「设置」页提权后重试".into());
+    }
+    let scheme = active_scheme_guid().ok_or("无法读取当前活动电源计划")?;
+    let (ac, dc) = processor_max_pair(&scheme)?;
+    // A missing override means the plan already runs at the Windows default of 100.
+    let old = (ac.unwrap_or(100), dc.unwrap_or(100));
+    if old == (100, 100) {
+        return Ok(());
+    }
+    let short = scheme.get(..8).unwrap_or(&scheme).to_string();
+    crate::journal::set_processor_max_with_journal(
+        &format!(
+            "最大处理器状态 {}%/{}%（交流/电池）→ 100%（计划 {short}）",
+            old.0, old.1
+        ),
+        &scheme,
+        old,
+        100,
+        || set_processor_max_values(100, 100),
+        || processor_max_pair(&scheme),
+    )?;
+    tracing::info!(scheme = %scheme, old_ac = old.0, old_dc = old.1, "最大处理器状态已恢复为 100%");
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

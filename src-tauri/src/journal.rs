@@ -60,6 +60,13 @@ pub enum Revert {
         #[serde(default)]
         applied: Option<u32>,
     },
+    /// Maximum processor state of one power scheme (AC and DC values are restored together).
+    ProcessorMax {
+        scheme: String,
+        old_ac: u32,
+        old_dc: u32,
+        applied: u32,
+    },
     None,
 }
 
@@ -790,6 +797,109 @@ pub(crate) fn set_epp_with_journal(
     journal.refresh_if_repaired()?;
     journal.ensure_storage_healthy()?;
     write_ahead_epp_change_with_journal(&mut journal, desc, old, applied, apply, read_current)
+}
+
+/// (AC, DC) maximum processor state of a scheme; `None` means the scheme has no override value.
+pub(crate) type ProcessorMaxPair = (Option<u32>, Option<u32>);
+
+fn write_ahead_processor_max_with_journal(
+    journal: &mut Journal,
+    desc: &str,
+    scheme: &str,
+    old: (u32, u32),
+    applied: u32,
+    apply: impl FnOnce() -> Result<(), String>,
+    mut read_current: impl FnMut() -> Result<ProcessorMaxPair, String>,
+) -> Result<(), String> {
+    if old.0 > 100 || old.1 > 100 || applied > 100 {
+        return Err("处理器状态快照超出 0-100 范围；未执行设置".into());
+    }
+    if !crate::power::is_valid_power_plan_guid(scheme) {
+        return Err("电源计划 GUID 不合法；未执行设置".into());
+    }
+    let old_pair: ProcessorMaxPair = (Some(old.0), Some(old.1));
+    let applied_pair: ProcessorMaxPair = (Some(applied), Some(applied));
+    if old_pair == applied_pair {
+        return Ok(());
+    }
+    let id = journal.push(
+        desc,
+        Revert::ProcessorMax {
+            scheme: scheme.to_string(),
+            old_ac: old.0,
+            old_dc: old.1,
+            applied,
+        },
+    )?;
+    match read_current() {
+        Ok(current) if current == old_pair => {}
+        Ok(_) => {
+            return Err(remove_intent_or_report(
+                journal,
+                id,
+                "最大处理器状态在写前日志准备期间已变化；未执行修改".into(),
+            ))
+        }
+        Err(error) => {
+            return Err(remove_intent_or_report(
+                journal,
+                id,
+                format!("无法复核最大处理器状态；未执行修改：{error}"),
+            ))
+        }
+    }
+    match apply() {
+        Ok(()) => match read_current() {
+            Ok(current) if current == applied_pair => Ok(()),
+            Ok(current) if current == old_pair => Err(remove_intent_or_report(
+                journal,
+                id,
+                "命令报告成功但最大处理器状态未变化；已保留原状态".into(),
+            )),
+            Ok(_) => Err("设置后最大处理器状态既非原值也非目标值；恢复记录已保留".into()),
+            Err(error) => Err(format!(
+                "设置后无法复核最大处理器状态；恢复记录已保留：{error}"
+            )),
+        },
+        Err(apply_error) => match read_current() {
+            Ok(current) if current == old_pair => Err(remove_intent_or_report(
+                journal,
+                id,
+                format!("设置失败，已确认最大处理器状态未改变：{apply_error}"),
+            )),
+            Ok(current) if current == applied_pair => Err(format!(
+                "命令报告失败但目标值已生效；恢复记录已保留：{apply_error}"
+            )),
+            Ok(_) => Err(format!(
+                "设置失败且当前值与原值/目标值均不匹配；恢复记录已保留：{apply_error}"
+            )),
+            Err(read_error) => Err(format!(
+                "设置失败且无法确认当前值；恢复记录已保留：{apply_error}；{read_error}"
+            )),
+        },
+    }
+}
+
+pub(crate) fn set_processor_max_with_journal(
+    desc: &str,
+    scheme: &str,
+    old: (u32, u32),
+    applied: u32,
+    apply: impl FnOnce() -> Result<(), String>,
+    read_current: impl FnMut() -> Result<ProcessorMaxPair, String>,
+) -> Result<(), String> {
+    let mut journal = JOURNAL.lock().unwrap();
+    journal.refresh_if_repaired()?;
+    journal.ensure_storage_healthy()?;
+    write_ahead_processor_max_with_journal(
+        &mut journal,
+        desc,
+        scheme,
+        old,
+        applied,
+        apply,
+        read_current,
+    )
 }
 
 fn write_ahead_power_plan_change_with_journal(
@@ -1540,6 +1650,31 @@ fn do_revert(r: Revert) -> Result<(), String> {
             }
             Ok(())
         }
+        Revert::ProcessorMax {
+            scheme,
+            old_ac,
+            old_dc,
+            applied,
+        } => {
+            if old_ac > 100 || old_dc > 100 || applied > 100 {
+                return Err("处理器状态快照超出 0-100 范围；保留恢复记录".into());
+            }
+            let active = crate::power::active_scheme_guid()
+                .ok_or_else(|| "无法读取当前活动电源计划；保留恢复记录".to_string())?;
+            if !active.eq_ignore_ascii_case(&scheme) {
+                return Err("活动电源计划已不是写入时的计划；保留恢复记录".into());
+            }
+            let current = crate::power::processor_max_pair(&scheme)?;
+            if current != (Some(applied), Some(applied)) {
+                return Err("最大处理器状态已被其他操作改动；保留恢复记录".into());
+            }
+            crate::power::set_processor_max_values(old_ac, old_dc)
+                .map_err(|e| format!("最大处理器状态还原失败: {e}"))?;
+            if crate::power::processor_max_pair(&scheme)? != (Some(old_ac), Some(old_dc)) {
+                return Err("还原命令已完成但原值未读回；保留恢复记录".into());
+            }
+            Ok(())
+        }
         Revert::None => Err("此操作不支持日志撤销，请使用专用恢复入口（如有）".into()),
     }
 }
@@ -1875,6 +2010,186 @@ mod tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    fn processor_journal(label: &str) -> (Journal, PathBuf) {
+        let path = test_journal_path(label);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        (
+            Journal {
+                changes: Vec::new(),
+                path: path.clone(),
+                next_id: 1,
+                next_group_id: 1,
+                storage_error: None,
+            },
+            path,
+        )
+    }
+
+    const SCHEME: &str = "381b4222-f694-41f0-9685-ff5bb260df2e";
+
+    #[test]
+    fn processor_max_serializes_with_a_lowercase_tag_the_frontend_expects() {
+        let revert = Revert::ProcessorMax {
+            scheme: SCHEME.into(),
+            old_ac: 70,
+            old_dc: 65,
+            applied: 100,
+        };
+        let value = serde_json::to_value(&revert).unwrap();
+        assert_eq!(value["t"], "processormax");
+        assert_eq!(value["old_ac"], 70);
+        assert_eq!(value["old_dc"], 65);
+        let back: Revert = serde_json::from_value(value).unwrap();
+        assert_eq!(back, revert);
+    }
+
+    #[test]
+    fn processor_max_intent_is_durable_before_the_write_and_verified_after() {
+        let (mut journal, path) = processor_journal("proc-max-durable");
+        let state = std::cell::RefCell::new((Some(70), Some(70)));
+        let mut saw_intent = false;
+        write_ahead_processor_max_with_journal(
+            &mut journal,
+            "raise cap",
+            SCHEME,
+            (70, 70),
+            100,
+            || {
+                let persisted: Vec<Change> =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert!(matches!(
+                    persisted[0].revert,
+                    Revert::ProcessorMax {
+                        old_ac: 70,
+                        old_dc: 70,
+                        applied: 100,
+                        ..
+                    }
+                ));
+                saw_intent = true;
+                *state.borrow_mut() = (Some(100), Some(100));
+                Ok(())
+            },
+            || Ok(*state.borrow()),
+        )
+        .unwrap();
+        assert!(saw_intent);
+        assert_eq!(journal.changes.len(), 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn processor_max_failure_with_unchanged_value_removes_the_intent() {
+        let (mut journal, path) = processor_journal("proc-max-failed");
+        let error = write_ahead_processor_max_with_journal(
+            &mut journal,
+            "raise cap",
+            SCHEME,
+            (70, 70),
+            100,
+            || Err("拒绝访问".into()),
+            || Ok((Some(70), Some(70))),
+        )
+        .unwrap_err();
+        assert!(error.contains("未改变"), "{error}");
+        assert!(journal.changes.is_empty());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn processor_max_ambiguous_outcomes_keep_the_recovery_record() {
+        // The command failed but only one of AC/DC changed: neither old nor applied.
+        let (mut journal, path) = processor_journal("proc-max-partial");
+        let state = std::cell::RefCell::new((Some(70), Some(70)));
+        let error = write_ahead_processor_max_with_journal(
+            &mut journal,
+            "raise cap",
+            SCHEME,
+            (70, 70),
+            100,
+            || {
+                // AC was written, then the DC write failed.
+                *state.borrow_mut() = (Some(100), Some(70));
+                Err("第二次写入失败".into())
+            },
+            || Ok(*state.borrow()),
+        )
+        .unwrap_err();
+        assert!(error.contains("恢复记录已保留"), "{error}");
+        assert_eq!(journal.changes.len(), 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn processor_max_refuses_when_the_value_changed_during_preparation_or_is_unreadable() {
+        for (label, read) in [
+            ("proc-max-changed", Ok((Some(80), Some(80)))),
+            ("proc-max-unreadable", Err("读取失败".to_string())),
+        ] {
+            let (mut journal, path) = processor_journal(label);
+            let mut applied = false;
+            let result = write_ahead_processor_max_with_journal(
+                &mut journal,
+                "raise cap",
+                SCHEME,
+                (70, 70),
+                100,
+                || {
+                    applied = true;
+                    Ok(())
+                },
+                || read.clone(),
+            );
+            assert!(result.is_err());
+            assert!(
+                !applied,
+                "must not write when the snapshot cannot be confirmed"
+            );
+            assert!(journal.changes.is_empty());
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn processor_max_rejects_out_of_range_snapshots_and_bad_scheme_ids_before_any_write() {
+        let (mut journal, path) = processor_journal("proc-max-invalid");
+        let mut applied = false;
+        for (scheme, old, new) in [
+            (SCHEME, (101, 70), 100),
+            (SCHEME, (70, 70), 101),
+            ("not-a-guid", (70, 70), 100),
+            ("..\\x", (70, 70), 100),
+        ] {
+            assert!(write_ahead_processor_max_with_journal(
+                &mut journal,
+                "x",
+                scheme,
+                old,
+                new,
+                || {
+                    applied = true;
+                    Ok(())
+                },
+                || Ok((Some(70), Some(70))),
+            )
+            .is_err());
+        }
+        assert!(!applied);
+        assert!(journal.changes.is_empty());
+        // Already at the requested value: nothing to do, nothing recorded.
+        write_ahead_processor_max_with_journal(
+            &mut journal,
+            "noop",
+            SCHEME,
+            (100, 100),
+            100,
+            || unreachable!("no write when already at target"),
+            || Ok((Some(100), Some(100))),
+        )
+        .unwrap();
+        assert!(journal.changes.is_empty());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
     #[test]
     fn failed_power_plan_switch_cleans_unchanged_intent_but_keeps_ambiguous_target() {
         let path = test_journal_path("power-plan-failed-unchanged");

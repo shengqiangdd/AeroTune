@@ -219,6 +219,8 @@ pub fn run() {
             power::list_power_plans,
             power::set_power_plan,
             power::battery_report,
+            power::get_processor_state,
+            power::remove_processor_limit,
             power::power_diagnostics,
             power::get_epp,
             power::set_epp,
