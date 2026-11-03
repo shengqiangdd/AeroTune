@@ -231,6 +231,9 @@ pub fn is_silent_start() -> bool {
     std::env::args().any(|argument| argument == "--silent")
 }
 
+/// Keep identical to `RELAUNCH_ELEVATED_ARGUMENT` in main.rs (checked by a contract test).
+const RELAUNCH_ELEVATED_ARGUMENT: &str = "--aerotune-relaunch-elevated";
+
 /// UAC 提权重启应用
 #[tauri::command(async)]
 pub fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
@@ -238,7 +241,9 @@ pub fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
     // Start-Process failures (including UAC cancellation) must keep the current app alive.
     // Escape PowerShell's single-quoted literal syntax for unusual install paths.
     let quoted = exe.to_string_lossy().replace('\'', "''");
-    let script = format!("$ErrorActionPreference='Stop'; Start-Process -FilePath '{quoted}' -Verb RunAs -ErrorAction Stop");
+    // The old process keeps the launch gate until it exits; this argument tells the replacement
+    // (main.rs) to wait for it instead of being refused as a duplicate launch.
+    let script = format!("$ErrorActionPreference='Stop'; Start-Process -FilePath '{quoted}' -ArgumentList '{RELAUNCH_ELEVATED_ARGUMENT}' -Verb RunAs -ErrorAction Stop");
     crate::util::run_checked_with_timeout(
         "powershell",
         &["-NoProfile", "-NonInteractive", "-Command", &script],
