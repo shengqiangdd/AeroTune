@@ -234,3 +234,23 @@ export function buildChangeJournalJson(changes, appVersion) {
     changes: entries,
   }, null, 2);
 }
+
+export const CHANGE_PAGE_SIZE = 50;
+
+/** Slice an already filtered list for display only; never use the page for undo or export. */
+export function paginateChanges(changes, page = 0, pageSize = CHANGE_PAGE_SIZE) {
+  const size = Number.isInteger(pageSize) && pageSize > 0 ? pageSize : CHANGE_PAGE_SIZE;
+  const total = Array.isArray(changes) ? changes.length : 0;
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  const requested = Number.isInteger(page) ? page : 0;
+  const current = Math.min(Math.max(requested, 0), pageCount - 1);
+  const start = current * size;
+  return {
+    page: current,
+    pageCount,
+    total,
+    start,
+    end: Math.min(start + size, total),
+    items: total === 0 ? [] : changes.slice(start, start + size),
+  };
+}

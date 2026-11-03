@@ -21,3 +21,9 @@ export function filterChanges(
 ): Change[];
 export function buildChangeJournalCsv(changes: Change[], appVersion: string): string;
 export function buildChangeJournalJson(changes: Change[], appVersion: string): string;
+export const CHANGE_PAGE_SIZE: number;
+export function paginateChanges(
+  changes: Change[],
+  page?: number,
+  pageSize?: number,
+): { page: number; pageCount: number; total: number; start: number; end: number; items: Change[] };

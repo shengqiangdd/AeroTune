@@ -23,7 +23,7 @@ import { api, AvailableUpdate, Change, SysInfo, ShadowStore, UpdateReadiness, Wi
 import { Btn, PageHead, Card, Chip, Toggle } from "../components/ui";
 import { toastOk, toastErr, toast } from "../lib/toast";
 import { fmtTime } from "../lib/format";
-import { buildChangeJournalCsv, buildChangeJournalJson, filterChanges, getChangeCategory, getChangeRevertTarget, summarizeUndoTargets } from "../lib/changeJournal.js";
+import { buildChangeJournalCsv, buildChangeJournalJson, filterChanges, getChangeCategory, getChangeRevertTarget, paginateChanges, summarizeUndoTargets } from "../lib/changeJournal.js";
 import type { ChangeCategoryFilter, ChangeReversibilityFilter } from "../lib/changeJournal.js";
 import { clearLocalObservationHistory, inspectLocalObservationHistory, LOCAL_OBSERVATION_HISTORY_TARGETS } from "../lib/localObservationHistory.js";
 import type { LocalObservationHistoryId, LocalObservationHistoryInventoryItem, LocalObservationHistoryResult } from "../lib/localObservationHistory.js";
@@ -45,6 +45,7 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
   const [journalCategory, setJournalCategory] = useState<ChangeCategoryFilter>("all");
   const [journalReversibility, setJournalReversibility] = useState<ChangeReversibilityFilter>("all");
   const [journalExporting, setJournalExporting] = useState(false);
+  const [journalPage, setJournalPage] = useState(0);
   const [info, setInfo] = useState<SysInfo | null>(null);
   const [infoStatus, setInfoStatus] = useState<"loading" | "ready" | "error">("loading");
   const [localHistoryResults, setLocalHistoryResults] = useState<LocalObservationHistoryResult[] | null>(null);
@@ -230,6 +231,9 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
     () => filterChanges(changes, journalQuery, journalCategory, journalReversibility).slice().reverse(),
     [changes, journalQuery, journalCategory, journalReversibility],
   );
+  // Display-only paging: exports and undo confirmations keep using the full filtered/unfiltered lists.
+  const journalView = useMemo(() => paginateChanges(filteredChanges, journalPage), [filteredChanges, journalPage]);
+  useEffect(() => { setJournalPage(0); }, [journalQuery, journalCategory, journalReversibility]);
 
   const exportJournal = async (format: "csv" | "json") => {
     if (journalExporting || filteredChanges.length === 0) return;
@@ -756,6 +760,13 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
             <option value="all">全部记录</option><option value="reversible">可还原</option><option value="info">仅信息记录</option>
           </select>
           <span aria-live="polite" className="text-[11px] text-slate-500">显示 {filteredChanges.length}/{changes.length}</span>
+          {journalView.pageCount > 1 && (
+            <span className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-400">
+              <button type="button" onClick={() => setJournalPage(journalView.page - 1)} disabled={journalView.page === 0} aria-label="变更日志上一页" className="rounded-md border border-white/10 px-2 py-1 enabled:hover:bg-white/8 disabled:cursor-not-allowed disabled:opacity-40">上一页</button>
+              <span aria-live="polite">第 {journalView.page + 1}/{journalView.pageCount} 页 · {journalView.start + 1}–{journalView.end}</span>
+              <button type="button" onClick={() => setJournalPage(journalView.page + 1)} disabled={journalView.page >= journalView.pageCount - 1} aria-label="变更日志下一页" className="rounded-md border border-white/10 px-2 py-1 enabled:hover:bg-white/8 disabled:cursor-not-allowed disabled:opacity-40">下一页</button>
+            </span>
+          )}
         </div>}
         {changesStatus === "ready" && changes.length === 0 ? (
           <div className="py-8 text-center text-sm text-slate-500">
@@ -766,7 +777,7 @@ export function Settings({ admin, onAdmin, appVersion, requestedSection, onReque
           <div className="py-8 text-center text-sm text-slate-500">没有符合当前搜索和筛选条件的记录</div>
         ) : changes.length > 0 ? (
           <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
-            {filteredChanges.map((c) => (
+            {journalView.items.map((c) => (
               <div
                 key={c.id}
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-white/6 bg-white/3 px-3.5 py-2.5"
