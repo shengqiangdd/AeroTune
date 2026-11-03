@@ -232,7 +232,7 @@ pub fn is_silent_start() -> bool {
 }
 
 /// UAC 提权重启应用
-#[tauri::command]
+#[tauri::command(async)]
 pub fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     // Start-Process failures (including UAC cancellation) must keep the current app alive.
@@ -529,7 +529,7 @@ pub fn export_diagnostic_report(
     serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_system_info() -> SysInfo {
     use sysinfo::System;
     let sys = System::new_all();

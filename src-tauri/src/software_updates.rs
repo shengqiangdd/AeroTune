@@ -62,7 +62,7 @@ fn prepare_display_output(output: String) -> Result<String, String> {
     Ok(clean)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn check_winget_updates() -> Result<WingetQueryResult, String> {
     QUERY_RUNNING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

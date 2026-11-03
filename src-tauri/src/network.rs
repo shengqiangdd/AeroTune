@@ -183,7 +183,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_adapters() -> Result<Vec<Adapter>, String> {
     let raw = crate::util::run_ps(
         "Get-NetAdapter | Sort-Object Status | Select-Object Name,InterfaceDescription,Status,LinkSpeed | ConvertTo-Json -Compress",
@@ -287,7 +287,7 @@ fn query_dns_entries() -> Result<Vec<DnsEntry>, String> {
     parse_dns_entries(&raw)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_dns() -> Result<Vec<DnsEntry>, String> {
     query_dns_entries()
 }
@@ -527,7 +527,7 @@ fn set_tcp_autotuning_with(
     record(&old, &requested)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_tcp_autotuning() -> String {
     crate::util::run_ps("(Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal")
         .map(|level| level.trim().to_ascii_lowercase())
@@ -588,7 +588,7 @@ fn parse_wifi_profiles(raw: Option<String>) -> Vec<WifiProfile> {
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_wifi_profiles() -> Vec<WifiProfile> {
     // WLAN XML is language-independent. Never request key=clear: this feature only
     // displays profile metadata, not saved credentials. Remove temporary exports in finally.
@@ -704,7 +704,7 @@ fn tcp_path(guid: &str) -> Result<String, String> {
     ))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_nic_power() -> Vec<NicPower> {
     let script = r#"Get-NetAdapter | ForEach-Object { $g='{'+$_.InterfaceGuid.ToString().ToUpper()+'}'; $p=Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}' | Where-Object { (Get-ItemProperty $_.PSPath -Name NetCfgInstanceId -ErrorAction SilentlyContinue).NetCfgInstanceId -eq $g } | Select-Object -First 1; $v=if($p){(Get-ItemProperty $p.PSPath -Name PnPCapabilities -ErrorAction SilentlyContinue).PnPCapabilities}else{$null}; [pscustomobject]@{name=$_.Name;guid=$g;PnPCapabilities=$v} } | ConvertTo-Json -Compress"#;
     parse_nic_power(crate::util::run_ps(script))
@@ -736,7 +736,7 @@ pub fn set_nic_power(guid: String, disable: bool) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_tcp_latency() -> Vec<TcpLatency> {
     let script = r#"Get-NetAdapter | ForEach-Object { $g='{'+$_.InterfaceGuid.ToString().ToUpper()+'}'; $p='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\'+$g; $v=Get-ItemProperty $p -ErrorAction SilentlyContinue; [pscustomobject]@{name=$_.Name;guid=$g;TcpAckFrequency=$v.TcpAckFrequency;TCPNoDelay=$v.TCPNoDelay} } | ConvertTo-Json -Compress"#;
     parse_tcp_latency(crate::util::run_ps(script))
@@ -895,7 +895,7 @@ fn parse_net_quality(raw: Result<String, String>) -> Result<NetQuality, String> 
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ping_quality() -> Result<NetQuality, String> {
     let script = r#"
 $ErrorActionPreference='SilentlyContinue'

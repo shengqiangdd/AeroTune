@@ -1260,7 +1260,7 @@ ConvertTo-Json -InputObject $packages -Compress -Depth 5
 }
 
 /// 卸载预装应用（当前用户；商店可重装）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_appx(full_name: String) -> Result<(), String> {
     if full_name.contains('\'') || full_name.len() > 200 {
         return Err("包名不合法".into());
@@ -1290,7 +1290,7 @@ pub fn remove_appx(full_name: String) -> Result<(), String> {
 // ---------- 系统级开关：CompactOS / 内存压缩 ----------
 
 /// CompactOS 系统文件压缩状态（true=已压缩）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn compactos_status() -> Result<bool, String> {
     let out = crate::util::run("compact", &["/compactos:query"]).ok_or("compact 命令不可用")?;
     let lower = out.to_lowercase();
@@ -1299,7 +1299,7 @@ pub fn compactos_status() -> Result<bool, String> {
         || lower.contains("已处于"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_compactos(on: bool) -> Result<(), String> {
     if !crate::util::is_admin() {
         return Err("CompactOS 切换需要管理员权限".into());
@@ -1330,13 +1330,13 @@ pub fn set_compactos(on: bool) -> Result<(), String> {
 }
 
 /// 内存压缩状态（Get-MMAgent）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mem_compression_status() -> Result<bool, String> {
     let out = crate::util::run_ps("(Get-MMAgent).MemoryCompression").ok_or("MMAgent 不可用")?;
     Ok(out.trim().eq_ignore_ascii_case("true"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_mem_compression(on: bool) -> Result<(), String> {
     if !crate::util::is_admin() {
         return Err("内存压缩切换需要管理员权限".into());

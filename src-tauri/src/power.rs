@@ -45,7 +45,7 @@ fn parse_plans(out: &str) -> Vec<Plan> {
     plans
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_power_plans() -> Result<Vec<Plan>, String> {
     let out = crate::util::run("powercfg", &["/list"]).ok_or("无法读取电源计划")?;
     let mut plans = parse_plans(&out);
@@ -237,7 +237,7 @@ $requests = @(Read-Lines '/requests'); $lastWake = @(Read-Lines '/lastwake'); $w
     }).await.map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn battery_report() -> Result<String, String> {
     let home = std::env::var("USERPROFILE").map_err(|_| "无法定位用户目录".to_string())?;
     let path = format!("{}\\Desktop\\AeroTune-电池报告.html", home);
@@ -421,7 +421,7 @@ pub struct HibernateInfo {
     pub size_gb: f64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hibernate_info() -> HibernateInfo {
     let meta = std::fs::metadata(r"C:\hiberfil.sys");
     let enabled = meta.is_ok();
@@ -472,7 +472,7 @@ pub struct PlanDup {
 }
 
 /// 同名计划的非活动副本（AeroTune 早期版本/用户误操作可能堆积）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_redundant_plans() -> Vec<PlanDup> {
     let plans = match list_power_plans() {
         Ok(p) => p,
