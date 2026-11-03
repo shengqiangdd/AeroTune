@@ -1251,6 +1251,9 @@ pub(crate) struct Adaptive {
     strategy_pending: Option<(StrategyKind, Instant)>,
     strategy_changed_at: Option<Instant>,
     priority_separation_gate: PrioritySeparationGate,
+    /// After a failed Win32PrioritySeparation write (typically standard-token access denied), do not retry,
+    /// and therefore do not rewrite the change journal, before this deadline.
+    priority_write_retry_after: Option<Instant>,
     telemetry: AutoTelemetry,
 }
 
@@ -2180,6 +2183,7 @@ const TPL_HIGH: &str = "e9a42b02-d5df-448d-aa00-03f14749eb61";
 const TPL_SAVER: &str = "a1841308-3541-4fab-bc81-f71556f20b4c";
 const STD_BALANCED: &str = "381b4222-f694-41f0-9685-ff5bb260df2e";
 const PLAN_RETRY_BACKOFF: Duration = Duration::from_secs(15 * 60);
+const PRIORITY_WRITE_RETRY_BACKOFF: Duration = Duration::from_secs(15 * 60);
 
 fn plan_retry_ready(
     retry_after: &mut std::collections::HashMap<PlanKind, Instant>,
@@ -2193,6 +2197,14 @@ fn plan_retry_ready(
         return false;
     }
     retry_after.remove(&kind);
+    true
+}
+
+fn priority_write_retry_ready(retry_after: &mut Option<Instant>, now: Instant) -> bool {
+    if retry_after.is_some_and(|deadline| deadline > now) {
+        return false;
+    }
+    *retry_after = None;
     true
 }
 
@@ -2464,7 +2476,10 @@ fn apply_knobs_locked(ad: &mut Adaptive, target: Knobs) {
             }
         }
     }
-    if cur.priority_separation != target.priority_separation {
+    if cur.priority_separation != target.priority_separation
+        && priority_write_retry_ready(&mut ad.priority_write_retry_after, Instant::now())
+    {
+        let attempt = Instant::now();
         match crate::tweaks::set_priority_separation(
             target.priority_separation,
             "自适应策略前台调度",
@@ -2473,8 +2488,12 @@ fn apply_knobs_locked(ad: &mut Adaptive, target: Knobs) {
                 actual.priority_separation = target.priority_separation;
                 actual.prio_boost = target.prio_boost;
                 ad.priority_separation_gate.record_applied(Instant::now());
+                ad.priority_write_retry_after = None;
             }
-            Err(error) => tracing::warn!(%error, "自适应：前台调度策略写入失败"),
+            Err(error) => {
+                ad.priority_write_retry_after = Some(attempt + PRIORITY_WRITE_RETRY_BACKOFF);
+                tracing::warn!(retry_minutes = PRIORITY_WRITE_RETRY_BACKOFF.as_secs() / 60, %error, "自适应：前台调度策略写入失败，已启用重试退避");
+            }
         }
     }
     if cur.gamedvr != target.gamedvr {
@@ -5791,6 +5810,43 @@ mod tests {
         assert!(!retry_after.contains_key(&PlanKind::Saver));
         assert!(plan_retry_ready(&mut retry_after, PlanKind::Balanced, now));
     }
+
+    #[test]
+    fn failed_priority_write_is_not_retried_until_backoff_expires() {
+        let now = Instant::now();
+        let mut retry_after = None;
+
+        // First attempt is always allowed and leaves no deadline behind.
+        assert!(priority_write_retry_ready(&mut retry_after, now));
+        assert!(retry_after.is_none());
+
+        // After a failure, every tick inside the window is suppressed (no registry or journal I/O).
+        retry_after = Some(now + PRIORITY_WRITE_RETRY_BACKOFF);
+        for elapsed in [0, 1, 15, 80, 14 * 60 + 59] {
+            assert!(
+                !priority_write_retry_ready(&mut retry_after, now + Duration::from_secs(elapsed)),
+                "retried {elapsed}s after a failed write"
+            );
+            assert!(
+                retry_after.is_some(),
+                "the deadline must survive suppressed ticks"
+            );
+        }
+
+        // Exactly at the deadline it may try again, and the stale deadline is cleared.
+        assert!(priority_write_retry_ready(
+            &mut retry_after,
+            now + PRIORITY_WRITE_RETRY_BACKOFF
+        ));
+        assert!(retry_after.is_none());
+    }
+
+    #[test]
+    fn priority_write_backoff_matches_the_plan_backoff_and_is_not_per_tick() {
+        assert_eq!(PRIORITY_WRITE_RETRY_BACKOFF, PLAN_RETRY_BACKOFF);
+        assert!(PRIORITY_WRITE_RETRY_BACKOFF >= Duration::from_secs(60));
+    }
+
     #[test]
     fn browser_fullscreen_is_not_game_but_explicit_list_is() {
         assert!(!game_signal(2, "chrome", false));
