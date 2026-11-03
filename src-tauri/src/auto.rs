@@ -2770,6 +2770,8 @@ pub struct AutoState {
     pub(crate) adaptive: Adaptive,
     pub last_foreground: String,
     pub last_fullscreen: bool,
+    /// Phase timings of the most recent tick (diagnostic only).
+    pub(crate) last_tick_phases: TickPhases,
     /// 场景影子观测的会话去重：当前全屏会话已记录过的进程名；非全屏时清空。
     scene_shadow_seen: Option<String>,
 }
@@ -2798,6 +2800,7 @@ impl AutoState {
             },
             last_foreground: String::new(),
             last_fullscreen: false,
+            last_tick_phases: TickPhases::default(),
             scene_shadow_seen: None,
         };
         if let Err(error) =
@@ -3035,6 +3038,19 @@ pub fn normalize_name(name: &str) -> String {
     t.strip_suffix(".exe").map(String::from).unwrap_or(t)
 }
 
+/// Records how long each phase of one tick took. Read only when the whole tick was slow, so the
+/// normal path costs a handful of `Instant::now()` calls and never changes behaviour.
+#[derive(Default, Clone, Copy, Debug)]
+pub(crate) struct TickPhases {
+    pub query_ms: u64,
+    pub adaptive_ms: u64,
+    pub shared_ms: u64,
+}
+
+fn ms_since(since: Instant) -> u64 {
+    since.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
 /// 每秒由监控线程调用。mode 为当前场景模式；ac_online 来自电源状态；
 /// anomalies 为诊断引擎本轮确认的异常列表（用于处置规则）。
 /// 返回本秒执行的动作描述（前端 toast + 原生通知）。
@@ -3050,6 +3066,7 @@ pub fn tick(
 ) -> Vec<String> {
     let mut actions = Vec::new();
     let now = Instant::now();
+    let query_started = Instant::now();
     let notification = fullscreen_notification();
     let fullscreen = notification == 2 || notification == 3;
     state.last_fullscreen = fullscreen;
@@ -3147,6 +3164,8 @@ pub fn tick(
         }
     }
 
+    state.last_tick_phases.query_ms = ms_since(query_started);
+    let adaptive_started = Instant::now();
     // ---- 全自动自适应引擎（开启时接管所有场景决策）----
     if state.settings.adaptive {
         let media_fg = !fg_norm.is_empty() && MEDIA_PROCS.contains(&fg_norm.as_str());
@@ -3210,6 +3229,8 @@ pub fn tick(
         }
     }
 
+    state.last_tick_phases.adaptive_ms = ms_since(adaptive_started);
+    let shared_started = Instant::now();
     let effective_mode = if state.settings.adaptive {
         state.adaptive.state.clone()
     } else {
@@ -3231,6 +3252,7 @@ pub fn tick(
         elapsed,
         sys,
     ));
+    state.last_tick_phases.shared_ms = ms_since(shared_started);
     actions
 }
 
@@ -5842,6 +5864,19 @@ mod tests {
     }
 
     #[test]
+    fn tick_phase_timer_starts_at_zero_and_measures_elapsed_time() {
+        let phases = TickPhases::default();
+        assert_eq!(
+            (phases.query_ms, phases.adaptive_ms, phases.shared_ms),
+            (0, 0, 0)
+        );
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(20));
+        let measured = ms_since(started);
+        assert!((20..2_000).contains(&measured), "measured {measured} ms");
+    }
+
+    #[test]
     fn priority_write_backoff_matches_the_plan_backoff_and_is_not_per_tick() {
         assert_eq!(PRIORITY_WRITE_RETRY_BACKOFF, PLAN_RETRY_BACKOFF);
         assert!(PRIORITY_WRITE_RETRY_BACKOFF >= Duration::from_secs(60));
@@ -6042,6 +6077,7 @@ mod tests {
             adaptive: Adaptive::default(),
             last_foreground: String::new(),
             last_fullscreen: false,
+            last_tick_phases: TickPhases::default(),
             scene_shadow_seen: None,
         };
         state.settings.rules = vec![Rule {

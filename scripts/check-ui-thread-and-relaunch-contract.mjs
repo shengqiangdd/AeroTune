@@ -127,4 +127,13 @@ assert.match(auto, /failed_priority_write_is_not_retried_until_backoff_expires/)
 const cargoConfig = read("src-tauri/.cargo/config.toml");
 assert.doesNotMatch(cargoConfig, /^\s*target-dir\s*=/m, "do not commit a machine-specific target-dir");
 assert.doesNotMatch(cargoConfig, /[A-Za-z]:[\\/]/, "do not commit drive-specific paths");
-console.log("PASS slow commands stay off the UI thread; elevated relaunch waits for the old instance; journal paging is display-only; failed priority writes back off; no machine-specific Cargo path");
+// ---------------------------------------------------------------------------
+// 6. The slow-tick warning reports where the time went (lock wait vs tick phases) so it can be fixed.
+// ---------------------------------------------------------------------------
+const stats = read("src-tauri/src/stats.rs");
+assert.match(stats, /lock_wait_ms,\s*query_ms = phases\.query_ms,\s*adaptive_ms = phases\.adaptive_ms,\s*shared_ms = phases\.shared_ms/);
+assert.match(auto, /pub\(crate\) struct TickPhases/);
+assert.match(auto, /state\.last_tick_phases\.query_ms = ms_since\(query_started\)/);
+assert.match(auto, /state\.last_tick_phases\.adaptive_ms = ms_since\(adaptive_started\)/);
+assert.match(auto, /state\.last_tick_phases\.shared_ms = ms_since\(shared_started\)/);
+console.log("PASS slow commands stay off the UI thread; elevated relaunch waits for the old instance; journal paging is display-only; failed priority writes back off; no machine-specific Cargo path; slow ticks report their phases");

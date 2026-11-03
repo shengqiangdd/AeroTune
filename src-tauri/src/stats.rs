@@ -2865,8 +2865,12 @@ pub fn start(
                     supported
                 });
             let auto_tick_started = std::time::Instant::now();
-            let (actions, memory_relief_enabled) = {
+            let (actions, memory_relief_enabled, lock_wait_ms, phases) = {
                 let mut st = auto.lock().unwrap();
+                let lock_wait_ms = auto_tick_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64;
                 let memory_relief_enabled = st.settings.auto_memory_relief;
                 let actions = crate::auto::tick(
                     &mut st,
@@ -2878,12 +2882,23 @@ pub fn start(
                     telemetry,
                     Duration::from_secs_f64(dt_secs),
                 );
-                (actions, memory_relief_enabled)
+                (
+                    actions,
+                    memory_relief_enabled,
+                    lock_wait_ms,
+                    st.last_tick_phases,
+                )
             };
             let auto_tick_elapsed = auto_tick_started.elapsed();
             if auto_tick_elapsed >= Duration::from_millis(250) {
+                // Phase split is diagnostic only: lock_wait_ms is time spent waiting for the AutoState
+                // lock (held by UI commands), query/adaptive/shared are the tick's own phases.
                 tracing::warn!(
                     elapsed_ms = auto_tick_elapsed.as_millis(),
+                    lock_wait_ms,
+                    query_ms = phases.query_ms,
+                    adaptive_ms = phases.adaptive_ms,
+                    shared_ms = phases.shared_ms,
                     "自动控制器处理偏慢（包含系统操作与 AutoState 锁持有时间）"
                 );
             }
